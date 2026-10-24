@@ -155,6 +155,7 @@ export class Runner {
       if (trigger.type === "webhook") {
         const result = await this.webhook(trigger, { actor, notifications, task, project, prompt, token });
         this.svc.finishRun(run.id, result);
+        this.reportFailure(actor, task, result);
       } else {
         const { command, args } = this.commandFor(trigger, { actor, task, prompt, token, cwd, notification: primary });
         const result = await this.spawnRun(actor.id, command, args, {
@@ -163,14 +164,29 @@ export class Runner {
           timeoutMs: (trigger.timeout_minutes ?? 30) * 60_000,
         });
         this.svc.finishRun(run.id, result);
+        this.reportFailure(actor, task, result);
       }
     } catch (err) {
-      this.svc.finishRun(run.id, { status: "failed", output: String((err as Error).message), reason: "runner error" });
+      const failure = { status: "failed" as const, output: String((err as Error).message), reason: "runner error" };
+      this.svc.finishRun(run.id, failure);
+      this.reportFailure(actor, task, failure);
     } finally {
       this.svc.revokeEphemeralToken(token);
       const now = this.svc.findActor(actor.id);
       if (now?.status === "working" && now.status_note.startsWith("woken")) this.svc.touchActor(actor.id, "idle", "");
     }
+  }
+
+  /** Tell the human when a wake-up did not work, so failures never go unnoticed. */
+  private reportFailure(actor: Actor, task: Task | null, result: { status: string; reason?: string; output?: string }) {
+    if (result.status !== "failed") return;
+    const tail = (result.output ?? "").trim().split("\n").slice(-3).join(" ").slice(0, 300);
+    this.svc.notify(this.svc.settings().owner, "run_failed", {
+      sender: actor.id,
+      task_id: task?.id ?? null,
+      project_id: task?.project_id ?? null,
+      message: `Wake-up of @${actor.id} via ${actor.trigger.type} failed${result.reason ? ` (${result.reason})` : ""}${tail ? `: ${tail}` : ""}`,
+    });
   }
 
   private safeTask(id: string): Task | null {

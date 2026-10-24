@@ -26,6 +26,7 @@ Commands
       --owner <name>         Your display name on first run
 
   mcp                        Stdio MCP bridge for agents (env TUNADESK_URL, TUNADESK_TOKEN)
+  briefing                   Print the caller's briefing (for SessionStart hooks; silent if the desk is down)
 
   agent add <id>             Register an agent and print its token + setup snippets
       --name, --platform (${PLATFORMS.join("|")}),
@@ -121,6 +122,18 @@ async function main() {
       };
       const server = createMcpServer(call, VERSION);
       await server.connect(new StdioServerTransport());
+      return;
+    }
+
+    case "briefing": {
+      const url = (values.url ?? process.env.TUNADESK_URL ?? "http://127.0.0.1:4545").replace(/\/$/, "");
+      const token = values.token ?? process.env.TUNADESK_TOKEN;
+      try {
+        const res = await fetch(`${url}/api/briefing.md`, { headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(4000) });
+        if (res.ok) console.log(await res.text());
+      } catch {
+        /* the desk is optional: never break the agent's session */
+      }
       return;
     }
 

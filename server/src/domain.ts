@@ -26,7 +26,7 @@ export type DecisionStatus = (typeof DECISION_STATUSES)[number];
 export const TRIGGER_TYPES = ["none", "claude", "codex", "grok", "command", "webhook"] as const;
 export type TriggerType = (typeof TRIGGER_TYPES)[number];
 
-export const NOTIFICATION_TYPES = ["assigned", "mentioned", "handoff", "review_request", "completed", "comment", "loop_guard", "budget"] as const;
+export const NOTIFICATION_TYPES = ["assigned", "mentioned", "handoff", "review_request", "completed", "comment", "loop_guard", "budget", "run_failed"] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
 /** Notification types that wake an agent through its trigger. */

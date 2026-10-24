@@ -66,3 +66,22 @@ describe("runner", () => {
     expect(() => startServer({ dbPath: ":memory:", port: 48999, host: "0.0.0.0", runner: false, quiet: true })).toThrow(/TUNADESK_ADMIN_TOKEN/);
   });
 });
+
+describe("runner failures", () => {
+  it("notifies the owner when a wake-up fails", async () => {
+    const port = 45000 + Math.floor(Math.random() * 900);
+    const d = startServer({ dbPath: ":memory:", port, host: "127.0.0.1", runner: true, quiet: true, runnerDebounceMs: 50 });
+    try {
+      const { svc } = d;
+      svc.createActor({ id: "dev", name: "Dev", trigger: { type: "command", enabled: true, command: process.execPath, args: ["-e", "console.error('boom'); process.exit(3)"] } });
+      svc.createProject({ name: "Web", key: "WEB", repo_path: tmpdir() });
+      svc.createTask({ project: "WEB", title: "x", assignee: "dev" }, "me");
+      await until(() => svc.inbox("me").some((n) => n.type === "run_failed"));
+      const n = svc.inbox("me").find((x) => x.type === "run_failed")!;
+      expect(n.message).toContain("boom");
+      expect(svc.runs({ actor: "dev" })[0].exit_code).toBe(3);
+    } finally {
+      d.close();
+    }
+  });
+});

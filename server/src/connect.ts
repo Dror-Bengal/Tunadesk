@@ -47,6 +47,20 @@ export function connectSnippets(opts: { deskUrl: string; agentId: string; token?
       ].join("\n"),
     },
     {
+      id: "claude-hook",
+      title: "Claude Code — automatic briefing (optional)",
+      description: "Add to ~/.claude/settings.json so every Claude Code session starts with the desk briefing in context.",
+      language: "json",
+      code: JSON.stringify(
+        {
+          env: { TUNADESK_URL: url, TUNADESK_TOKEN: token },
+          hooks: { SessionStart: [{ hooks: [{ type: "command", command: `node ${JSON.stringify(cli).slice(1, -1)} briefing` }] }] },
+        },
+        null,
+        2,
+      ),
+    },
+    {
       id: "codex",
       title: "OpenAI Codex CLI",
       description: "Append to ~/.codex/config.toml, then add the AGENTS.md block to your repos (or ~/.codex/AGENTS.md for all of them).",

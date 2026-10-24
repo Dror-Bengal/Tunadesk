@@ -99,6 +99,7 @@ const en = {
   "notif.comment": "commented",
   "notif.loop_guard": "Loop guard",
   "notif.budget": "Budget alert",
+  "notif.run_failed": "wake-up failed",
   // columns
   "col.task": "Task",
   "col.owner": "Owner",
@@ -387,6 +388,7 @@ const he: Partial<Record<MessageKey, string>> = {
   "notif.comment": "הגיב",
   "notif.loop_guard": "שומר לולאות",
   "notif.budget": "התראת תקציב",
+  "notif.run_failed": "השכמה נכשלה",
   "col.task": "משימה",
   "col.owner": "אחראי",
   "col.status": "סטטוס",

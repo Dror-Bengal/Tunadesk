@@ -229,7 +229,7 @@ function NeedsYou({ notifications, review, decisions }: { notifications: Notific
     })),
     ...notifications.filter((n) => !n.task_id || !review.some((r) => r.id === n.task_id)).map((n) => ({
       id: n.id,
-      icon: n.type === "loop_guard" ? "🔁" : n.type === "budget" ? "💸" : "🔔",
+      icon: n.type === "loop_guard" ? "🔁" : n.type === "budget" ? "💸" : n.type === "run_failed" ? "⚠️" : "🔔",
       title: `${actor(n.sender)?.name ?? n.sender ?? "Tunadesk"} ${t(`notif.${n.type}` as MessageKey)}${n.task_key ? ` · ${n.task_key}` : ""}`,
       sub: n.message,
       when: n.created_at,

@@ -9,3 +9,4 @@ web/dist
 .DS_Store
 coverage
 .claude/
+server/skills
