@@ -1,0 +1,38 @@
+{
+  "name": "tunadesk",
+  "version": "0.1.0",
+  "description": "Tunadesk server, MCP server, runner and CLI.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "tunadesk": "dist/cli/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "public"
+  ],
+  "scripts": {
+    "dev": "tsx watch src/cli/index.ts serve",
+    "build": "tsc -p tsconfig.json && node scripts/copy-web.mjs",
+    "start": "node dist/cli/index.js serve",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "seed": "tsx src/cli/index.ts seed"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "hono": "^4.13.13",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

@@ -1,0 +1,10 @@
+node_modules
+dist
+server/public
+web/dist
+*.db
+*.db-*
+.tunadesk
+.env
+.DS_Store
+coverage
