@@ -2,7 +2,8 @@ import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join, extname, normalize } from "node:path";
+import { join, extname, normalize, sep } from "node:path";
+import { timingSafeEqual } from "node:crypto";
 import type { Service, Actor, Activity } from "../service.js";
 import {
   DECISION_STATUSES,
@@ -126,9 +127,9 @@ const decisionCreate = z.object({
 });
 
 async function body<T extends z.ZodTypeAny>(c: Context, schema: T): Promise<z.infer<T>> {
-  const type = c.req.header("content-type") ?? "";
-  // Requiring JSON forces a CORS preflight, which blocks drive-by writes from random web pages.
-  if (!type.includes("application/json")) throw new SwarmError(415, "unsupported_media_type", "Send JSON with Content-Type: application/json");
+  const type = (c.req.header("content-type") ?? "").split(";")[0].trim().toLowerCase();
+  // Exactly application/json: browsers must preflight it, so a random web page cannot post here.
+  if (type !== "application/json") throw new SwarmError(415, "unsupported_media_type", "Send JSON with Content-Type: application/json");
   let raw: unknown;
   try {
     raw = await c.req.json();
@@ -166,14 +167,34 @@ export function createApp(svc: Service, config: AppConfig) {
 
   const owner = () => svc.actor(svc.settings().owner);
 
+  const isAdminToken = (token: string) => {
+    if (!config.adminToken) return false;
+    const a = Buffer.from(token);
+    const b = Buffer.from(config.adminToken);
+    return a.length === b.length && timingSafeEqual(a, b);
+  };
+
+  /** Browsers always send Origin on cross-site requests; only our own pages may talk to the API. */
+  const crossSite = (c: Context<Env>): boolean => {
+    const origin = c.req.header("origin");
+    if (!origin || c.env?.internalActor) return false;
+    const host = c.req.header("host") ?? new URL(c.req.url).host;
+    try {
+      return new URL(origin).host !== host;
+    } catch {
+      return true;
+    }
+  };
+
   /** Who is calling? Agents present their token; the human uses the admin token or (locally) nothing. */
   const resolveActor = (c: Context<Env>): Actor | null => {
     const internal = c.env?.internalActor;
     if (internal) return svc.findActor(internal);
     const header = c.req.header("authorization");
-    const token = header?.startsWith("Bearer ") ? header.slice(7).trim() : c.req.query("token");
+    // ?token= exists for EventSource and links to markdown views, so it is only honoured on reads.
+    const token = header?.startsWith("Bearer ") ? header.slice(7).trim() : c.req.method === "GET" ? c.req.query("token") : undefined;
     if (token) {
-      if (config.adminToken && token === config.adminToken) return owner();
+      if (isAdminToken(token)) return owner();
       return svc.actorByToken(token);
     }
     if (!config.adminToken && config.trustLocal) {
@@ -186,6 +207,7 @@ export function createApp(svc: Service, config: AppConfig) {
   };
 
   const authed = async (c: Context<Env>, next: () => Promise<void>) => {
+    if (crossSite(c)) return c.json({ error: { code: "forbidden", message: "Cross-site requests are not allowed" } }, 403);
     const actor = resolveActor(c);
     if (!actor) return c.json({ error: { code: "unauthorized", message: "Missing or invalid token" } }, 401);
     c.set("actor", actor);
@@ -286,7 +308,7 @@ export function createApp(svc: Service, config: AppConfig) {
       budget: svc.budget(a.id),
       tasks: svc.listTasks({ assignee: a.id }),
       next: svc.recommend(a.id, 8),
-      runs: svc.runs({ actor: a.id, limit: 20 }),
+      runs: c.get("actor").kind === "human" || c.get("actor").id === a.id ? svc.runs({ actor: a.id, limit: 20 }) : [],
       activity: svc.activity({ actor: a.id, limit: 60 }).filter((x) => x.type !== "notification").slice(0, 30),
     });
   });
@@ -295,7 +317,8 @@ export function createApp(svc: Service, config: AppConfig) {
     const id = c.req.param("id");
     if (me.kind !== "human" && me.id !== id) throw forbidden("Agents can only update themselves");
     const b = await body(c, actorPatch);
-    if (me.kind !== "human" && (b.trigger || b.token_budget !== undefined || b.archived !== undefined)) throw forbidden("Only humans change triggers, budgets or archive state");
+    if (me.kind !== "human" && (b.trigger || b.token_budget !== undefined || b.budget_period !== undefined || b.archived !== undefined))
+      throw forbidden("Only humans change triggers, budgets or archive state");
     return c.json(svc.updateActor(id, b, me.id));
   });
   api.post("/actors/:id/token", (c) => {
@@ -346,6 +369,9 @@ export function createApp(svc: Service, config: AppConfig) {
   api.get("/projects/:ref/board.md", (c) => md(c, renderBoard(svc, c.req.param("ref"), { include_closed: c.req.query("closed") === "1" })));
   api.patch("/projects/:ref", async (c) => {
     const b = await body(c, projectPatch);
+    // Woken agents run inside repo_path, so only a human may point an existing project somewhere else.
+    if (b.repo_path !== undefined && c.get("actor").kind !== "human" && b.repo_path !== svc.project(c.req.param("ref")).repo_path)
+      throw forbidden("Only humans can change a project's repo path");
     return c.json(svc.updateProject(c.req.param("ref"), b, c.get("actor").id));
   });
   api.delete("/projects/:ref", (c) => {
@@ -397,7 +423,7 @@ export function createApp(svc: Service, config: AppConfig) {
       subtasks: svc.listTasks({ parent: t.id, include_closed: true }),
       decisions: svc.decisions({ task: t.id }),
       activity: svc.activity({ task: t.id, limit: 100 }).filter((a) => a.type !== "notification"),
-      runs: svc.runs({ limit: 200 }).filter((r) => r.task_id === t.id).slice(0, 20),
+      runs: c.get("actor").kind === "human" ? svc.runs({ limit: 200 }).filter((r) => r.task_id === t.id).slice(0, 20) : [],
     });
   });
   api.patch("/tasks/:ref", async (c) => {
@@ -480,8 +506,17 @@ export function createApp(svc: Service, config: AppConfig) {
         .filter((a) => a.type !== "notification"),
     ),
   );
-  api.get("/runs", (c) => c.json(svc.runs({ actor: c.req.query("actor"), limit: Number(c.req.query("limit") ?? 50) })));
-  api.get("/runs/:id", (c) => c.json(svc.run(c.req.param("id"))));
+  // Run output can contain anything a CLI printed; agents only see their own runs.
+  api.get("/runs", (c) => {
+    const me = c.get("actor");
+    const actor = me.kind === "human" ? c.req.query("actor") : me.id;
+    return c.json(svc.runs({ actor, limit: Number(c.req.query("limit") ?? 50) }));
+  });
+  api.get("/runs/:id", (c) => {
+    const run = svc.run(c.req.param("id"));
+    if (c.get("actor").kind !== "human" && run.actor !== c.get("actor").id) throw forbidden("Not your run");
+    return c.json(run);
+  });
 
   // live updates
   api.get("/events", (c) =>
@@ -508,12 +543,17 @@ export function createApp(svc: Service, config: AppConfig) {
 
   // ---------------------------------------------------------------- web app
   if (config.webDir && existsSync(config.webDir)) {
-    const root = normalize(config.webDir);
+    const root = normalize(config.webDir).replace(/[\\/]+$/, "");
     const index = join(root, "index.html");
     app.get("*", (c) => {
-      const rel = decodeURIComponent(new URL(c.req.url).pathname);
+      let rel: string;
+      try {
+        rel = decodeURIComponent(new URL(c.req.url).pathname);
+      } catch {
+        return c.text("Bad request", 400);
+      }
       const file = normalize(join(root, rel));
-      if (file.startsWith(root) && existsSync(file) && statSync(file).isFile()) {
+      if (file.startsWith(root + sep) && existsSync(file) && statSync(file).isFile()) {
         const headers: Record<string, string> = { "content-type": MIME[extname(file)] ?? "application/octet-stream" };
         if (rel.startsWith("/assets/")) headers["cache-control"] = "public, max-age=31536000, immutable";
         return c.body(readFileSync(file), 200, headers);

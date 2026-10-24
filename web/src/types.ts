@@ -25,6 +25,8 @@ export interface TriggerConfig {
   secret?: string;
   timeout_minutes?: number;
   respect_budget?: boolean;
+  /** Set when a webhook secret is stored; the secret itself is never sent to clients. */
+  has_secret?: boolean;
 }
 
 export interface Budget {

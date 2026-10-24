@@ -554,7 +554,7 @@ function TriggerForm({ actor }: { actor: Actor }) {
               </label>
               <label className="field">
                 <span>{t("agents.triggerSecret")}</span>
-                <input className="input" dir="ltr" type="password" value={f.secret ?? ""} onChange={(e) => set("secret", e.target.value || undefined)} />
+                <input className="input" dir="ltr" type="password" value={f.secret ?? ""} placeholder={f.has_secret ? "•••••••• (saved)" : ""} onChange={(e) => set("secret", e.target.value || undefined)} />
               </label>
             </div>
           )}

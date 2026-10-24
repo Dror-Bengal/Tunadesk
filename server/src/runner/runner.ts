@@ -2,8 +2,8 @@
 // the runner launches Claude Code headless in the project's repo with a prompt that points it at the desk.
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { Service, Actor, Activity, Notification, Task, Project } from "../service.js";
 import { WAKING_NOTIFICATIONS, type NotificationType, type TriggerConfig } from "../domain.js";
@@ -124,7 +124,8 @@ export class Runner {
   }
 
   private async execute(actor: Actor, notifications: Notification[]) {
-    const trigger = actor.trigger;
+    // Full config (including the webhook secret), which API responses never carry.
+    const trigger = this.svc.triggerConfig(actor.id);
     const primary = notifications.find((n) => n.task_id) ?? notifications[0];
     const task = primary.task_id ? this.safeTask(primary.task_id) : null;
     const project = task ? this.svc.project(task.project_id) : primary.project_id ? this.safeProject(primary.project_id) : null;
@@ -151,13 +152,18 @@ export class Runner {
     this.svc.markRead(actor.id, notifications.map((n) => n.id));
     this.opts.log(`waking ${actor.id} via ${trigger.type}${task ? ` for ${task.key}` : ""}`);
 
+    let scratch: string | null = null;
+    let keepToken = false;
     try {
       if (trigger.type === "webhook") {
+        // The receiver usually acks and works asynchronously: leave the token valid until its TTL.
+        keepToken = true;
         const result = await this.webhook(trigger, { actor, notifications, task, project, prompt, token });
         this.svc.finishRun(run.id, result);
         this.reportFailure(actor, task, result);
       } else {
-        const { command, args } = this.commandFor(trigger, { actor, task, prompt, token, cwd, notification: primary });
+        scratch = mkdtempSync(join(tmpdir(), "tunadesk-run-"));
+        const { command, args } = this.commandFor(trigger, { actor, task, prompt, token, cwd, notification: primary, scratch });
         const result = await this.spawnRun(actor.id, command, args, {
           cwd,
           env: { TUNADESK_URL: this.opts.deskUrl, TUNADESK_TOKEN: token, TUNADESK_AGENT: actor.id, TUNADESK_TASK: task?.key ?? "" },
@@ -171,7 +177,8 @@ export class Runner {
       this.svc.finishRun(run.id, failure);
       this.reportFailure(actor, task, failure);
     } finally {
-      this.svc.revokeEphemeralToken(token);
+      if (!keepToken) this.svc.revokeEphemeralToken(token);
+      if (scratch) rmSync(scratch, { recursive: true, force: true });
       const now = this.svc.findActor(actor.id);
       if (now?.status === "working" && now.status_note.startsWith("woken")) this.svc.touchActor(actor.id, "idle", "");
     }
@@ -208,14 +215,20 @@ export class Runner {
   /** Build argv for a CLI agent. Arguments are passed as an array — never through a shell. */
   commandFor(
     trigger: TriggerConfig,
-    ctx: { actor: Actor; task: Task | null; prompt: string; token: string; cwd: string; notification: Notification },
+    ctx: { actor: Actor; task: Task | null; prompt: string; token: string; cwd: string; notification: Notification; scratch?: string },
   ): { command: string; args: string[] } {
     const extra = trigger.args ?? [];
     const mcpUrl = `${this.opts.deskUrl}/mcp`;
     switch (trigger.type) {
       case "claude": {
         const mcpConfig = JSON.stringify({ mcpServers: { tunadesk: { type: "http", url: mcpUrl, headers: { Authorization: `Bearer ${ctx.token}` } } } });
-        const args = ["-p", ctx.prompt, "--mcp-config", mcpConfig, "--output-format", "text"];
+        // A private file keeps the run token out of `ps` output.
+        let configArg = mcpConfig;
+        if (ctx.scratch) {
+          configArg = join(ctx.scratch, "mcp.json");
+          writeFileSync(configArg, mcpConfig, { mode: 0o600 });
+        }
+        const args = ["-p", ctx.prompt, "--mcp-config", configArg, "--output-format", "text"];
         if (trigger.model) args.push("--model", trigger.model);
         args.push(...(extra.length ? extra : ["--permission-mode", "acceptEdits", "--allowedTools", "mcp__tunadesk"]));
         return { command: trigger.command || resolveBinary("claude", [join(homedir(), ".claude", "local", "claude")]), args };

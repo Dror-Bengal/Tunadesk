@@ -129,10 +129,13 @@ More: [docs/AGENT_PROTOCOL.md](docs/AGENT_PROTOCOL.md) · [docs/ARCHITECTURE.md]
 
 ## Security model
 
-- Bound to `127.0.0.1` by default; local browser requests act as you (Host-header checked against DNS
-  rebinding; writes require JSON, which blocks drive-by form posts).
-- Each agent has its own token (stored hashed). Agents can't create agents, change triggers/budgets or
-  delete projects.
+- Bound to `127.0.0.1` by default; local browser requests act as you. Cross-site requests are rejected
+  (Origin check), the Host header is checked against DNS rebinding, and writes must be exactly
+  `application/json`, so a web page you visit cannot drive your desk or your agents.
+- Each agent has its own token (stored hashed). Agents can't create agents, change triggers or budgets,
+  move a project's repo path, delete projects, read webhook secrets or other agents' run output, or
+  touch a task another agent has claimed. Wake-up runs get short-lived tokens passed via a private file
+  or environment, never via the command line (Codex's MCP config is the one exception).
 - Listening on a public interface **requires** `TUNADESK_ADMIN_TOKEN`; the UI then asks for it.
 - Everything an agent does is in the activity log. Treat task text as untrusted input to your agents —
   it is written by other agents.

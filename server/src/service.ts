@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { tx, type DB } from "./db/index.js";
+import type { DB } from "./db/index.js";
 import {
   CLOSED_STATUSES,
   OPEN_STATUSES,
@@ -37,6 +37,7 @@ import {
 // ---------------------------------------------------------------------------
 
 export interface Actor {
+  /** Trigger config as shown to clients: the webhook secret is never included (see has_secret). */
   id: string;
   name: string;
   kind: "human" | "agent";
@@ -50,7 +51,7 @@ export interface Actor {
   status: string;
   status_note: string;
   last_seen_at: string | null;
-  trigger: TriggerConfig;
+  trigger: TriggerConfig & { has_secret?: boolean };
   has_token: boolean;
   archived: boolean;
   created_at: string;
@@ -232,11 +233,36 @@ type Row = Record<string, unknown>;
 
 export class Service {
   readonly events = new EventEmitter();
+  /** Events produced inside a transaction, emitted only once it commits. */
+  private pendingEvents: Activity[] = [];
   /** Short-lived tokens minted for trigger runs (never persisted). */
   private ephemeral = new Map<string, { actor: string; expires: number }>();
 
   constructor(readonly db: DB) {
     this.events.setMaxListeners(200);
+  }
+
+  /** Run fn atomically; activity events are emitted after COMMIT and dropped on ROLLBACK. */
+  private tx<T>(fn: () => T): T {
+    if (this.db.isTransaction) return fn();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = fn();
+      this.db.exec("COMMIT");
+      const events = this.pendingEvents;
+      this.pendingEvents = [];
+      queueMicrotask(() => events.forEach((e) => this.events.emit("event", e)));
+      return result;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      this.pendingEvents = [];
+      throw err;
+    }
+  }
+
+  private emit(event: Activity) {
+    if (this.db.isTransaction) this.pendingEvents.push(event);
+    else queueMicrotask(() => this.events.emit("event", event));
   }
 
   // -------------------------------------------------------------------------
@@ -281,8 +307,7 @@ export class Service {
       data: opts.data ?? {},
       created_at,
     };
-    // Emit after the surrounding transaction commits so listeners read consistent state.
-    queueMicrotask(() => this.events.emit("event", event));
+    this.emit(event);
     return event;
   }
 
@@ -317,9 +342,10 @@ export class Service {
 
   private mapActor(r: Row): Actor {
     const { token_hash, trigger_json, archived, ...rest } = plain<Row>(r);
+    const { secret, ...trigger } = parseJson<TriggerConfig>(trigger_json as string, { type: "none", enabled: false });
     return {
       ...(rest as unknown as Actor),
-      trigger: parseJson<TriggerConfig>(trigger_json as string, { type: "none", enabled: false }),
+      trigger: { ...trigger, has_secret: Boolean(secret) },
       has_token: Boolean(token_hash),
       archived: Boolean(archived),
     };
@@ -330,6 +356,13 @@ export class Service {
       .prepare(`SELECT * FROM actors ${opts.include_archived ? "" : "WHERE archived = 0"} ORDER BY kind DESC, name`)
       .all() as Row[];
     return rows.map((r) => this.mapActor(r));
+  }
+
+  /** Full trigger config including the webhook secret — for the runner only, never for API responses. */
+  triggerConfig(id: string): TriggerConfig {
+    const r = this.db.prepare("SELECT trigger_json FROM actors WHERE id = ?").get(id) as Row | undefined;
+    if (!r) throw notFound(`Actor '${id}'`);
+    return parseJson<TriggerConfig>(r.trigger_json as string, { type: "none", enabled: false });
   }
 
   findActor(id: string): Actor | null {
@@ -420,7 +453,10 @@ export class Service {
     for (const key of ["name", "platform", "role", "color", "emoji", "description", "token_budget", "budget_period", "status", "status_note"] as const) {
       if (patch[key] !== undefined) fields[key] = patch[key] as string | number;
     }
-    if (patch.trigger) fields.trigger_json = JSON.stringify({ ...current.trigger, ...patch.trigger });
+    if (patch.trigger) {
+      const { has_secret: _ignored, ...incoming } = patch.trigger as TriggerConfig & { has_secret?: boolean };
+      fields.trigger_json = JSON.stringify({ ...this.triggerConfig(current.id), ...incoming });
+    }
     if (patch.archived !== undefined) fields.archived = patch.archived ? 1 : 0;
     if (Object.keys(fields).length === 0) return current;
     fields.updated_at = now();
@@ -480,7 +516,7 @@ export class Service {
     if (!Number.isFinite(tokens) || tokens < 0) throw badRequest("tokens must be a non-negative number");
     const a = this.actor(actorId);
     const task = opts.task ? this.taskRow(opts.task) : null;
-    tx(this.db, () => {
+    this.tx(() => {
       this.db
         .prepare("INSERT INTO usage (id, actor, task_id, tokens, cost_usd, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .run(newId("u_"), a.id, (task?.id as string) ?? null, Math.round(tokens), opts.cost_usd ?? 0, opts.note ?? "", now());
@@ -554,7 +590,7 @@ export class Service {
     }
     const id = newId("p_");
     const ts = now();
-    tx(this.db, () => {
+    this.tx(() => {
       this.db
         .prepare(
           `INSERT INTO projects (id, key, name, description, color, priority, repo_path, repo_url, owner, brief, created_at, updated_at)
@@ -648,7 +684,7 @@ export class Service {
     const g = this.db.prepare("SELECT * FROM groups WHERE id = ?").get(id) as Row | undefined;
     if (!g) throw notFound("Group");
     const remaining = this.db.prepare("SELECT id FROM groups WHERE project_id = ? AND id != ? ORDER BY position LIMIT 1").get(g.project_id as string, id) as Row | undefined;
-    tx(this.db, () => {
+    this.tx(() => {
       this.db.prepare("UPDATE tasks SET group_id = ? WHERE group_id = ?").run((remaining?.id as string) ?? null, id);
       this.db.prepare("DELETE FROM groups WHERE id = ?").run(id);
       this.log(by, "group.deleted", { project_id: g.project_id as string, summary: `Group "${g.name}" removed` });
@@ -789,7 +825,7 @@ export class Service {
     const id = newId("t_");
     const ts = now();
     const status = input.status ?? "todo";
-    const created = tx(this.db, () => {
+    const created = this.tx(() => {
       this.db.prepare("UPDATE projects SET task_seq = task_seq + 1, updated_at = ? WHERE id = ?").run(ts, p.id);
       const seq = Number((this.db.prepare("SELECT task_seq FROM projects WHERE id = ?").get(p.id) as Row).task_seq);
       const key = `${p.key}-${seq}`;
@@ -852,6 +888,7 @@ export class Service {
     by: string | null = null,
   ): Task {
     const t = this.taskRow(ref);
+    this.assertNotLeasedByOther(t, by);
     const fields: Record<string, string | number | null> = {};
     const changes: string[] = [];
     const ts = now();
@@ -918,10 +955,12 @@ export class Service {
       changes.push("estimate");
     }
     if (patch.position !== undefined) fields.position = patch.position;
+    // A human touching status or owner is the "decision" the loop guard was waiting for.
+    if ((fields.status !== undefined || changes.includes("assignee")) && Number(t.handoff_count) > 0 && by && this.isHuman(by)) fields.handoff_count = 0;
     if (Object.keys(fields).length === 0) return this.task(t.id as string);
     fields.updated_at = ts;
 
-    tx(this.db, () => {
+    this.tx(() => {
       this.db.prepare(`UPDATE tasks SET ${Object.keys(fields).map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...Object.values(fields), t.id as string);
       if (changes.length) {
         const parts: string[] = [];
@@ -950,6 +989,7 @@ export class Service {
 
   deleteTask(ref: string, by: string | null = null) {
     const t = this.taskRow(ref);
+    this.assertNotLeasedByOther(t, by);
     this.db.prepare("DELETE FROM tasks WHERE id = ?").run(t.id as string);
     this.log(by, "task.deleted", { project_id: t.project_id as string, summary: `${t.key} deleted: ${t.title}` });
   }
@@ -980,10 +1020,24 @@ export class Service {
   // agent workflow: claim, release, complete, handoff
   // -------------------------------------------------------------------------
 
+  private isHuman(actorId: string | null): boolean {
+    return actorId ? this.findActor(actorId)?.kind === "human" : true;
+  }
+
+  /** Agents may not modify a task another agent is actively working on; humans can always override. */
+  private assertNotLeasedByOther(t: Row, actorId: string | null) {
+    if (this.isHuman(actorId)) return;
+    const holder = t.lease_holder as string | null;
+    const expires = t.lease_expires_at as string | null;
+    if (holder && holder !== actorId && expires && expires > now()) {
+      throw conflict(`${t.key} is claimed by ${holder} until ${expires}`);
+    }
+  }
+
   claim(ref: string, actorId: string, minutes?: number): Task {
     const a = this.actor(actorId);
     const lease = minutes ?? this.settings().default_lease_minutes;
-    return tx(this.db, () => {
+    return this.tx(() => {
       const t = this.taskRow(ref);
       const holder = t.lease_holder as string | null;
       const expires = t.lease_expires_at as string | null;
@@ -1013,7 +1067,7 @@ export class Service {
     const t = this.taskRow(ref);
     const a = this.actor(actorId);
     if (t.lease_holder && t.lease_holder !== a.id) throw conflict(`${t.key} is claimed by ${t.lease_holder}`);
-    tx(this.db, () => {
+    this.tx(() => {
       this.db.prepare("UPDATE tasks SET lease_holder = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?").run(now(), t.id as string);
       if (note) this.addCommentInternal(t, a.id, note, "comment");
       this.log(a.id, "task.released", { project_id: t.project_id as string, task_id: t.id as string, summary: `${a.name} let go of ${t.key}` });
@@ -1028,15 +1082,30 @@ export class Service {
   ): Task {
     const a = this.actor(actorId);
     const t = this.taskRow(ref);
+    this.assertNotLeasedByOther(t, a.id);
+    if (CLOSED_STATUSES.includes(t.status as TaskStatus)) throw conflict(`${t.key} is already ${t.status}`);
     const status = input.status ?? "done";
-    tx(this.db, () => {
+    this.tx(() => {
       this.addCommentInternal(t, a.id, input.summary, "report");
-      this.updateTask(t.id as string, { status, ...(input.next_assignee ? { assignee: input.next_assignee } : {}) }, a.id);
-      this.db.prepare("UPDATE tasks SET lease_holder = NULL, lease_expires_at = NULL WHERE id = ?").run(t.id as string);
       if (input.next_assignee && status !== "done") {
+        // Passing work on for review/testing is a handoff too, so it counts toward the loop guard.
         const target = this.actor(input.next_assignee);
-        this.notify(target.id, "review_request", { sender: a.id, task_id: t.id as string, project_id: t.project_id as string, message: `${t.key} is ready for ${status}: ${t.title}` });
+        const { count, tripped } = this.loopGuard(t, a.id);
+        this.db
+          .prepare("UPDATE tasks SET status = ?, assignee = ?, handoff_count = ?, updated_at = ? WHERE id = ?")
+          .run(tripped ? "blocked" : status, tripped ? (t.assignee as string | null) : target.id, count, now(), t.id as string);
+        this.log(a.id, "task.status", {
+          project_id: t.project_id as string,
+          task_id: t.id as string,
+          summary: `${t.key} status → ${tripped ? "blocked" : status} · assignee → ${tripped ? t.assignee : target.id}`,
+          data: { changes: ["status", "assignee"], loop_guard: tripped },
+        });
+        if (tripped) this.tripLoopGuard(t, a.id, count);
+        else this.notify(target.id, "review_request", { sender: a.id, task_id: t.id as string, project_id: t.project_id as string, message: `${t.key} is ready for ${status}: ${t.title}` });
+      } else {
+        this.updateTask(t.id as string, { status }, a.id);
       }
+      this.db.prepare("UPDATE tasks SET lease_holder = NULL, lease_expires_at = NULL WHERE id = ?").run(t.id as string);
       this.db.prepare("UPDATE actors SET status = 'idle', status_note = '', last_seen_at = ? WHERE id = ?").run(now(), a.id);
     });
     if (input.tokens_used) this.recordUsage(a.id, input.tokens_used, { task: t.id as string, note: "task completion" });
@@ -1057,10 +1126,9 @@ export class Service {
     const from = this.actor(fromId);
     const to = this.actor(input.to);
     const t = this.taskRow(ref);
-    const limit = this.settings().loop_guard_limit;
-    const result = tx(this.db, () => {
-      const count = Number(t.handoff_count) + 1;
-      const tripped = count > limit;
+    this.assertNotLeasedByOther(t, from.id);
+    const result = this.tx(() => {
+      const { count, tripped } = this.loopGuard(t, from.id);
       const status = tripped ? "blocked" : (input.status ?? (to.role === "tester" ? "testing" : to.role === "reviewer" ? "review" : "todo"));
       this.db
         .prepare("UPDATE tasks SET handoff_count = ?, lease_holder = NULL, lease_expires_at = NULL WHERE id = ?")
@@ -1084,13 +1152,7 @@ export class Service {
         data: { from: from.id, to: to.id, status, subtasks: subtasks.map((s) => s.key), loop_guard: tripped },
       });
       if (tripped) {
-        const owner = this.settings().owner;
-        this.notify(owner, "loop_guard", {
-          sender: from.id,
-          task_id: t.id as string,
-          project_id: t.project_id as string,
-          message: `${t.key} bounced between agents ${count} times — paused for a human decision.`,
-        });
+        this.tripLoopGuard(t, from.id, count);
       } else {
         this.notify(to.id, "handoff", { sender: from.id, task_id: t.id as string, project_id: t.project_id as string, message: truncate(input.message, 400) });
       }
@@ -1099,6 +1161,22 @@ export class Service {
     });
     if (input.tokens_used) this.recordUsage(from.id, input.tokens_used, { task: t.id as string, note: "handoff" });
     return { task: this.task(t.id as string), ...result };
+  }
+
+  /** Next handoff count for a task; humans reset it (their handoff is the decision the guard waits for). */
+  private loopGuard(t: Row, actorId: string): { count: number; tripped: boolean } {
+    if (this.isHuman(actorId)) return { count: 0, tripped: false };
+    const count = Number(t.handoff_count) + 1;
+    return { count, tripped: count > this.settings().loop_guard_limit };
+  }
+
+  private tripLoopGuard(t: Row, sender: string, count: number) {
+    this.notify(this.settings().owner, "loop_guard", {
+      sender,
+      task_id: t.id as string,
+      project_id: t.project_id as string,
+      message: `${t.key} bounced between agents ${count} times — paused for a human decision.`,
+    });
   }
 
   /** Release leases whose holder went silent. Returns the keys that were freed. */
@@ -1123,7 +1201,7 @@ export class Service {
   addComment(ref: string, authorId: string | null, body: string, kind: Comment["kind"] = "comment"): Comment {
     if (!body.trim()) throw badRequest("Comment body is empty");
     const t = this.taskRow(ref);
-    return tx(this.db, () => this.addCommentInternal(t, authorId, body, kind));
+    return this.tx(() => this.addCommentInternal(t, authorId, body, kind));
   }
 
   private addCommentInternal(t: Row, authorId: string | null, body: string, kind: Comment["kind"], mentions = true): Comment {
@@ -1210,7 +1288,7 @@ export class Service {
     const ts = now();
     if (ids === "all") this.db.prepare("UPDATE notifications SET read_at = ? WHERE recipient = ? AND read_at IS NULL").run(ts, actorId);
     else for (const id of ids) this.db.prepare("UPDATE notifications SET read_at = ? WHERE id = ? AND recipient = ?").run(ts, id, actorId);
-    queueMicrotask(() => this.events.emit("event", { id: 0, actor: actorId, type: "inbox.read", project_id: null, task_id: null, summary: "", data: { recipient: actorId }, created_at: ts }));
+    this.emit({ id: 0, actor: actorId, type: "inbox.read", project_id: null, task_id: null, summary: "", data: { recipient: actorId }, created_at: ts });
   }
 
   // -------------------------------------------------------------------------
@@ -1264,7 +1342,7 @@ export class Service {
     const project = input.project ? this.project(input.project) : task ? this.project(task.project_id as string) : null;
     const id = newId("d_");
     const ts = now();
-    tx(this.db, () => {
+    this.tx(() => {
       const n = Number(
         (this.db.prepare(`SELECT COUNT(*) AS n FROM decisions WHERE ${project ? "project_id = ?" : "project_id IS NULL"}`).get(...(project ? [project.id] : [])) as Row).n,
       ) + 1;
