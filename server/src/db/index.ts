@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -192,7 +192,9 @@ const MIGRATIONS: string[] = [
 
 export function openDb(file: string): DB {
   if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true });
-  const db = new DatabaseSync(file);
+  // Loaded lazily so the warning filter above is installed before node:sqlite initialises.
+  const { DatabaseSync: Database } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
+  const db = new Database(file);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
   migrate(db);
   return db;

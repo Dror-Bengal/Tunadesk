@@ -287,7 +287,7 @@ export function createApp(svc: Service, config: AppConfig) {
       tasks: svc.listTasks({ assignee: a.id }),
       next: svc.recommend(a.id, 8),
       runs: svc.runs({ actor: a.id, limit: 20 }),
-      activity: svc.activity({ actor: a.id, limit: 30 }),
+      activity: svc.activity({ actor: a.id, limit: 60 }).filter((x) => x.type !== "notification").slice(0, 30),
     });
   });
   api.patch("/actors/:id", async (c) => {

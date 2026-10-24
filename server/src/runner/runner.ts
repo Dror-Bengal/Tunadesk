@@ -40,11 +40,11 @@ export class Runner {
     opts: RunnerOptions,
   ) {
     this.opts = {
-      debounceMs: 3000,
-      maxRunsPerHour: 12,
-      maxRunsPerTaskPerHour: 4,
-      ...opts,
+      deskUrl: opts.deskUrl,
+      cliPath: opts.cliPath,
       debounceMs: opts.debounceMs ?? 3000,
+      maxRunsPerHour: opts.maxRunsPerHour ?? 12,
+      maxRunsPerTaskPerHour: opts.maxRunsPerTaskPerHour ?? 4,
       log: opts.log ?? ((m) => console.log(`[runner] ${m}`)),
     };
   }

@@ -77,7 +77,7 @@ export function renderBriefing(svc: Service, actorId: string, opts: { project?: 
   out.push("## Teammates");
   out.push(
     b.teammates
-      .map((t) => `- @${t.id} ${t.name} (${t.kind === "human" ? "human" : `${t.platform}, ${t.role}`}) — ${t.status}${t.status_note ? `: ${t.status_note}` : ""}`)
+      .map((t) => (t.kind === "human" ? `- @${t.id} ${t.name} (human — your boss; ask with @${t.id})` : `- @${t.id} ${t.name} (${t.platform}, ${t.role}) — ${t.status}${t.status_note ? `: ${t.status_note}` : ""}`))
       .join("\n"),
   );
   out.push("");

@@ -825,7 +825,7 @@ export class Service {
         );
       for (const b of input.blocked_by ?? []) this.linkInternal(this.taskRow(b).id as string, id);
       this.log(by, "task.created", { project_id: p.id, task_id: id, summary: `${key} created: ${input.title.trim()}`, data: { assignee, status } });
-      if (assignee && assignee !== by) this.notify(assignee, "assigned", { sender: by, task_id: id, project_id: p.id, message: `${key}: ${input.title.trim()}` });
+      if (assignee && assignee !== by) this.notify(assignee, "assigned", { sender: by, task_id: id, project_id: p.id, message: input.title.trim() });
       this.notifyMentions(input.description ?? "", by, id, p.id, [assignee]);
       return key;
     });
@@ -938,7 +938,7 @@ export class Service {
         });
       }
       if (newAssignee && newAssignee !== by) {
-        this.notify(newAssignee, "assigned", { sender: by, task_id: t.id as string, project_id: t.project_id as string, message: `${t.key}: ${fields.title ?? t.title}` });
+        this.notify(newAssignee, "assigned", { sender: by, task_id: t.id as string, project_id: t.project_id as string, message: String(fields.title ?? t.title) });
       }
       if (fields.status === "done" && t.reporter && t.reporter !== by) {
         this.notify(t.reporter as string, "completed", { sender: by, task_id: t.id as string, project_id: t.project_id as string, message: `${t.key} is done: ${t.title}` });

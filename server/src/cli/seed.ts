@@ -144,6 +144,7 @@ export function seedDemo(svc: Service): Record<string, string> {
       insert.run(newId("u_"), actor, Math.round(base * jitter), days(-d));
     }
   }
+  svc.touchActor("claude-dev", "working", `${hero.key}: Redesign hero section`);
   svc.touchActor("codex-qa", "idle", "");
   svc.touchActor("grok-research", "offline", "");
   return tokens;
