@@ -13,6 +13,8 @@ try {
   /* storage unavailable */
 }
 
+if (new URLSearchParams(window.location.search).has("snapshot")) document.documentElement.classList.add("snapshot");
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <I18nProvider>

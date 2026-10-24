@@ -1917,3 +1917,14 @@ pre {
   background: var(--surface);
   border-inline-end: 1px solid var(--border);
 }
+/* ?snapshot: static rendering for screenshots and printing. */
+.snapshot *,
+.snapshot *::before,
+.snapshot *::after {
+  animation: none !important;
+  transition: none !important;
+}
+.snapshot .live-dot,
+.snapshot .live-dot + span {
+  visibility: hidden;
+}

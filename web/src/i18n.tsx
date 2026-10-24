@@ -111,6 +111,7 @@ const en = {
   "col.updated": "Updated",
   // home
   "home.hello": "Good to see you, {name}",
+  "home.helloAnon": "Good to see you",
   "home.subtitle": "Here is what your agents are up to.",
   "home.inProgress": "In progress",
   "home.inReview": "Review & testing",
@@ -398,6 +399,7 @@ const he: Partial<Record<MessageKey, string>> = {
   "col.tokens": "טוקנים",
   "col.updated": "עודכן",
   "home.hello": "טוב לראות אותך, {name}",
+  "home.helloAnon": "טוב לראות אותך",
   "home.subtitle": "זה מה שהסוכנים שלך עושים עכשיו.",
   "home.inProgress": "בעבודה",
   "home.inReview": "בסקירה ובבדיקות",
@@ -577,6 +579,8 @@ const dictionaries: Record<Lang, Partial<Record<MessageKey, string>>> = { en, he
 const LANG_KEY = "tunadesk.lang";
 
 function initialLang(): Lang {
+  const fromUrl = new URLSearchParams(window.location.search).get("lang");
+  if (fromUrl === "he" || fromUrl === "en") return fromUrl;
   try {
     const saved = localStorage.getItem(LANG_KEY);
     if (saved === "he" || saved === "en") return saved;

@@ -22,7 +22,7 @@ export function Home({ onNewProject }: { onNewProject: () => void }) {
     <div className="page">
       <div className="page-header">
         <div>
-          <h1>{t("home.hello", { name: ownerName })}</h1>
+          <h1>{ownerName && ownerName !== "Me" ? t("home.hello", { name: ownerName }) : t("home.helloAnon")}</h1>
           <p>{t("home.subtitle")}</p>
         </div>
         <span className="spacer" />

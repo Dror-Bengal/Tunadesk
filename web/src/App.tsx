@@ -74,7 +74,8 @@ function Shell() {
   const [navOpen, setNavOpen] = useState(false);
   const [newProject, setNewProject] = useState(false);
 
-  useEffect(() => connectEvents(setLive), []);
+  // ?snapshot renders a static page (no live connection) — for screenshots, printing and embedding.
+  useEffect(() => (new URLSearchParams(window.location.search).has("snapshot") ? undefined : connectEvents(setLive)), []);
   useEffect(() => {
     // Refresh when the tab comes back, in case events were missed while asleep.
     const onVis = () => document.visibilityState === "visible" && invalidate();

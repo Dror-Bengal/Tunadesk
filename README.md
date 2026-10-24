@@ -13,6 +13,14 @@ log their decisions and respect token budgets. You watch it all live on one boar
 
 </div>
 
+<p align="center"><img src="docs/img/home.png" alt="Mission control: agents, projects, what needs you and live activity" width="900" /></p>
+
+| Board (Monday-style table) | Task updates, handoffs & @mentions |
+| --- | --- |
+| <img src="docs/img/board.png" alt="Project board" /> | <img src="docs/img/drawer.png" alt="Task drawer" /> |
+| **Agent: queue, budget, trigger, runs** | **Hebrew / RTL kanban** |
+| <img src="docs/img/agent.png" alt="Agent page" /> | <img src="docs/img/hebrew.png" alt="Hebrew kanban" /> |
+
 ---
 
 ## Why
