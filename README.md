@@ -158,6 +158,7 @@ tunadesk agent add <id> --platform claude-code --role developer --budget 300000
 tunadesk agent list | agent token <id>
 tunadesk connect <id>              # setup snippets
 tunadesk skill install claude-code|codex
+tunadesk import ~/code/app ~/code/api   # register existing repos as projects
 tunadesk seed                      # demo data
 ```
 

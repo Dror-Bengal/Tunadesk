@@ -2,7 +2,9 @@
 import { parseArgs } from "node:util";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { cpSync, existsSync, mkdirSync, readFileSync, appendFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, appendFileSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { basename } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { startServer, bootstrap, VERSION } from "../server.js";
 import { openDb } from "../db/index.js";
@@ -37,6 +39,7 @@ Commands
   connect <id>               Print setup snippets for an agent
 
   skill install <platform>   Install the protocol for claude-code (skill) or codex (AGENTS.md)
+  import <dir> [dir…]        Register existing repos/folders as projects (name, git remote, description)
   seed                       Load demo projects, agents and a dev ⇄ QA handoff story
 
 Environment
@@ -202,6 +205,41 @@ async function main() {
         }
       } else {
         throw new Error("Supported: claude-code, codex. For other agents use skills/generic/SYSTEM_PROMPT.md.");
+      }
+      return;
+    }
+
+    case "import": {
+      if (!positionals.length) throw new Error("Usage: tunadesk import <dir> [dir…]");
+      const svc = openService(values.db);
+      const known = new Set(svc.listProjects({ include_archived: true }).map((p) => p.repo_path));
+      for (const raw of positionals) {
+        const dir = resolve(raw);
+        if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+          console.log(`skip ${dir}: not a directory`);
+          continue;
+        }
+        if (known.has(dir)) {
+          console.log(`skip ${dir}: already on the desk`);
+          continue;
+        }
+        let repoUrl = "";
+        try {
+          repoUrl = execFileSync("git", ["-C", dir, "remote", "get-url", "origin"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+        } catch {
+          /* not a git repo or no remote */
+        }
+        let description = "";
+        try {
+          description = String(JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).description ?? "");
+        } catch {
+          /* no package.json */
+        }
+        const name = basename(dir)
+          .replace(/[-_]+/g, " ")
+          .replace(/\b\w/g, (c) => c.toUpperCase());
+        const p = svc.createProject({ name, description, repo_path: dir, repo_url: repoUrl.replace(/^git@github\.com:/, "https://github.com/").replace(/\.git$/, "") }, svc.settings().owner);
+        console.log(`added ${p.key.padEnd(6)} ${name}  ${dir}`);
       }
       return;
     }
