@@ -63,6 +63,7 @@ const triggerSchema = z
     cwd: z.string().optional(),
     url: z.string().optional(),
     secret: z.string().optional(),
+    headers: z.record(z.string().min(1).max(100), z.string().max(4000)).optional(),
     timeout_minutes: z.number().positive().max(24 * 60).optional(),
     respect_budget: z.boolean().optional(),
     where: z.enum(["auto", "desk", "remote"]).optional(),
@@ -577,7 +578,7 @@ export function createApp(svc: Service, config: AppConfig) {
         alive = false;
         detach();
       });
-      const { secret: _secret, url: _url, ...trigger } = svc.triggerConfig(me.id);
+      const { secret: _secret, url: _url, headers: _headers, ...trigger } = svc.triggerConfig(me.id);
       await stream.writeSSE({ event: "hello", data: JSON.stringify({ actor: me.id, name: me.name, trigger }) });
       while (alive) {
         await stream.sleep(20_000);

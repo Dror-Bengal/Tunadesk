@@ -145,3 +145,14 @@ describe("static files", () => {
     expect((await app.request("http://localhost:4545/%E0%A4%A")).status).toBe(400);
   });
 });
+
+describe("webhook headers", () => {
+  it("stores custom headers as secrets and sends them with the webhook", async () => {
+    svc.updateActor("qa", { trigger: { headers: { Authorization: "Bearer grok-key" } } }, "me");
+    const list = await (await call("/api/actors", { token: dev })).text();
+    expect(list).not.toContain("grok-key");
+    expect(JSON.parse(list).find((a: { id: string }) => a.id === "qa").trigger.header_names).toEqual(["Authorization"]);
+    expect(svc.triggerConfig("qa").headers).toEqual({ Authorization: "Bearer grok-key" });
+    expect(svc.triggerConfig("qa").secret).toBe("hush");
+  });
+});

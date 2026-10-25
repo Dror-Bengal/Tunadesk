@@ -27,6 +27,8 @@ export interface TriggerConfig {
   respect_budget?: boolean;
   /** Set when a webhook secret is stored; the secret itself is never sent to clients. */
   has_secret?: boolean;
+  header_names?: string[];
+  headers?: Record<string, string>;
   where?: "auto" | "desk" | "remote";
 }
 

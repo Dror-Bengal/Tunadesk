@@ -49,6 +49,8 @@ export interface TriggerConfig {
   url?: string;
   /** Webhook HMAC secret (sha256 signature in X-Tunadesk-Signature). */
   secret?: string;
+  /** Extra webhook headers, e.g. `Authorization: Bearer <key>` for a hosted agent. Secret like `secret`. */
+  headers?: Record<string, string>;
   /** Max wall-clock minutes for a single run. */
   timeout_minutes?: number;
   /** Skip non-critical work when the agent has no budget left. */

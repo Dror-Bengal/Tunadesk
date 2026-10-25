@@ -98,3 +98,43 @@ describe("restarts", () => {
     expect(svc.run(run.id).reason).toMatch(/restarted/);
   });
 });
+
+describe("webhook wake-ups", () => {
+  it("posts the wake payload with custom headers and the HMAC signature", async () => {
+    const { createServer } = await import("node:http");
+    const { createHmac } = await import("node:crypto");
+    const received: Array<{ headers: Record<string, unknown>; body: string }> = [];
+    const hook = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        received.push({ headers: req.headers, body });
+        res.end("ok");
+      });
+    });
+    await new Promise<void>((r) => hook.listen(0, "127.0.0.1", r));
+    const hookPort = (hook.address() as { port: number }).port;
+    const port = 43000 + Math.floor(Math.random() * 900);
+    desk = startServer({ dbPath: ":memory:", port, host: "127.0.0.1", runner: true, quiet: true, runnerDebounceMs: 50 });
+    const { svc } = desk;
+    svc.createActor({
+      id: "grok",
+      name: "Grok",
+      platform: "grok",
+      trigger: { type: "webhook", enabled: true, url: `http://127.0.0.1:${hookPort}/wake`, secret: "s3", headers: { Authorization: "Bearer grok-key", "X-Extra": "1" } },
+    });
+    svc.createProject({ name: "Web", key: "WEB" });
+    svc.createTask({ project: "WEB", title: "Research pricing", assignee: "grok" }, "me");
+    await until(() => received.length === 1);
+    hook.close();
+    const { headers, body } = received[0];
+    expect(headers.authorization).toBe("Bearer grok-key");
+    expect(headers["x-extra"]).toBe("1");
+    expect(headers["x-tunadesk-signature"]).toBe("sha256=" + createHmac("sha256", "s3").update(body).digest("hex"));
+    const payload = JSON.parse(body);
+    expect(payload.event).toBe("tunadesk.wake");
+    expect(payload.task.key).toBe("WEB-1");
+    expect(payload.token).toMatch(/^tdk_/);
+    await until(() => svc.runs({ actor: "grok" })[0]?.status === "succeeded");
+  });
+});

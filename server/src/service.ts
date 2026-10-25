@@ -52,7 +52,7 @@ export interface Actor {
   status: string;
   status_note: string;
   last_seen_at: string | null;
-  trigger: TriggerConfig & { has_secret?: boolean };
+  trigger: TriggerConfig & { has_secret?: boolean; header_names?: string[] };
   has_token: boolean;
   archived: boolean;
   created_at: string;
@@ -343,10 +343,10 @@ export class Service {
 
   private mapActor(r: Row): Actor {
     const { token_hash, trigger_json, archived, ...rest } = plain<Row>(r);
-    const { secret, ...trigger } = parseJson<TriggerConfig>(trigger_json as string, { type: "none", enabled: false });
+    const { secret, headers, ...trigger } = parseJson<TriggerConfig>(trigger_json as string, { type: "none", enabled: false });
     return {
       ...(rest as unknown as Actor),
-      trigger: { ...trigger, has_secret: Boolean(secret) },
+      trigger: { ...trigger, has_secret: Boolean(secret), header_names: Object.keys(headers ?? {}) },
       has_token: Boolean(token_hash),
       archived: Boolean(archived),
     };
@@ -455,7 +455,7 @@ export class Service {
       if (patch[key] !== undefined) fields[key] = patch[key] as string | number;
     }
     if (patch.trigger) {
-      const { has_secret: _ignored, ...incoming } = patch.trigger as TriggerConfig & { has_secret?: boolean };
+      const { has_secret: _ignored, header_names: _names, ...incoming } = patch.trigger as TriggerConfig & { has_secret?: boolean; header_names?: string[] };
       fields.trigger_json = JSON.stringify({ ...this.triggerConfig(current.id), ...incoming });
     }
     if (patch.archived !== undefined) fields.archived = patch.archived ? 1 : 0;

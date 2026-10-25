@@ -360,6 +360,7 @@ export class Runner {
       prompt: ctx.prompt,
     });
     const headers: Record<string, string> = { "content-type": "application/json", "user-agent": "tunadesk-runner" };
+    for (const [name, value] of Object.entries(trigger.headers ?? {})) headers[name.toLowerCase()] = value;
     if (trigger.secret) headers["x-tunadesk-signature"] = "sha256=" + createHmac("sha256", trigger.secret).update(payload).digest("hex");
     try {
       const res = await fetch(trigger.url, { method: "POST", headers, body: payload, signal: AbortSignal.timeout(30_000) });

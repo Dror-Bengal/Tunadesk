@@ -484,6 +484,7 @@ function TriggerForm({ actor }: { actor: Actor }) {
   const run = useAction();
   const [f, setF] = useState<TriggerConfig>(actor.trigger);
   const [args, setArgs] = useState((actor.trigger.args ?? []).join("\n"));
+  const [headerText, setHeaderText] = useState("");
   useEffect(() => {
     setF(actor.trigger);
     setArgs((actor.trigger.args ?? []).join("\n"));
@@ -575,6 +576,20 @@ function TriggerForm({ actor }: { actor: Actor }) {
             </>
           )}
           {f.type === "webhook" && (
+            <label className="field">
+              <span>{t("agents.triggerHeaders")}</span>
+              <textarea
+                className="textarea"
+                dir="ltr"
+                rows={2}
+                value={headerText}
+                placeholder="Authorization: Bearer …"
+                onChange={(e) => setHeaderText(e.target.value)}
+              />
+              {f.header_names?.length ? <small>{t("agents.triggerHeadersSaved", { names: f.header_names.join(", ") })}</small> : null}
+            </label>
+          )}
+          {f.type === "webhook" && (
             <div className="field-row">
               <label className="field">
                 <span>{t("agents.triggerUrl")}</span>
@@ -601,8 +616,16 @@ function TriggerForm({ actor }: { actor: Actor }) {
       <button
         className="btn primary"
         onClick={async () => {
-          const trigger = { ...f, args: args.split("\n").map((s) => s.trim()).filter(Boolean) };
+          const headers = Object.fromEntries(
+            headerText
+              .split("\n")
+              .map((l) => l.trim())
+              .filter((l) => l.includes(":"))
+              .map((l) => [l.slice(0, l.indexOf(":")).trim(), l.slice(l.indexOf(":") + 1).trim()]),
+          );
+          const trigger = { ...f, args: args.split("\n").map((s) => s.trim()).filter(Boolean), ...(Object.keys(headers).length ? { headers } : {}) };
           await run(() => patch(`/api/actors/${actor.id}`, { trigger }), t("settings.saved"));
+          setHeaderText("");
           invalidate();
         }}
       >
