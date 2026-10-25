@@ -80,8 +80,21 @@ export interface Project {
   locked_to: string | null;
   /** Other names the project goes by: chat session names, Hebrew/English names, nicknames. */
   aliases: string[];
+  /** The client (customer / umbrella) this project belongs to. */
+  client_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface Client {
+  id: string;
+  name: string;
+  aliases: string[];
+  color: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+  project_count?: number;
 }
 
 export interface ProjectSource {
@@ -285,6 +298,91 @@ export class Service {
 
   constructor(readonly db: DB) {
     this.events.setMaxListeners(200);
+  }
+
+  // -------------------------------------------------------------------------
+  // clients (client > project > tasks)
+  // -------------------------------------------------------------------------
+
+  private mapClient(r: Row): Client {
+    return { ...plain<Client>(r), aliases: parseJson<string[]>(r.aliases as string, []) };
+  }
+
+  listClients(): Client[] {
+    const counts = new Map((this.db.prepare("SELECT client_id, COUNT(*) AS n FROM projects WHERE client_id IS NOT NULL AND status != 'archived' GROUP BY client_id").all() as Row[]).map((r) => [r.client_id as string, Number(r.n)]));
+    return (this.db.prepare("SELECT * FROM clients ORDER BY name").all() as Row[]).map((r) => ({ ...this.mapClient(r), project_count: counts.get(r.id as string) ?? 0 }));
+  }
+
+  /** By id, name or alias (case/punctuation-insensitive). */
+  findClient(ref: string): Client | null {
+    const byId = this.db.prepare("SELECT * FROM clients WHERE id = ?").get(ref) as Row | undefined;
+    if (byId) return this.mapClient(byId);
+    const n = normalizeName(ref);
+    return this.listClients().find((c) => [c.name, ...c.aliases].some((x) => normalizeName(x) === n)) ?? null;
+  }
+
+  client(ref: string): Client {
+    const c = this.findClient(ref);
+    if (!c) throw notFound(`Client '${ref}'`);
+    return c;
+  }
+
+  similarClients(name: string, threshold = 0.6): Array<{ client: Client; score: number }> {
+    return this.listClients()
+      .map((client) => ({ client, score: Math.max(...[client.name, ...client.aliases].map((x) => titleSimilarity(name, x))) }))
+      .filter((m) => m.score >= threshold)
+      .sort((a, b) => b.score - a.score);
+  }
+
+  createClient(input: { name: string; aliases?: string[]; color?: string; notes?: string }, by: string | null = null): Client {
+    if (!input.name?.trim()) throw badRequest("Client name is required");
+    const existing = this.findClient(input.name);
+    if (existing) return existing;
+    const id = newId("cl_");
+    const ts = now();
+    this.db
+      .prepare("INSERT INTO clients (id, name, aliases, color, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(id, input.name.trim(), JSON.stringify((input.aliases ?? []).map((a) => a.trim()).filter(Boolean)), input.color ?? PROJECT_COLORS[this.listClients().length % PROJECT_COLORS.length], input.notes ?? "", ts, ts);
+    this.log(by, "client.created", { summary: `Client ${input.name.trim()} added` });
+    return this.client(id);
+  }
+
+  updateClient(ref: string, patch: { name?: string; aliases?: string[]; color?: string; notes?: string; add_aliases?: string[] }, by: string | null = null): Client {
+    const c = this.client(ref);
+    const aliases = patch.aliases ?? c.aliases;
+    for (const a of patch.add_aliases ?? []) if (![c.name, ...aliases].some((x) => normalizeName(x) === normalizeName(a))) aliases.push(a.trim());
+    this.db
+      .prepare("UPDATE clients SET name = ?, aliases = ?, color = ?, notes = ?, updated_at = ? WHERE id = ?")
+      .run(patch.name?.trim() || c.name, JSON.stringify(aliases), patch.color ?? c.color, patch.notes ?? c.notes, now(), c.id);
+    this.log(by, "client.updated", { summary: `Client ${patch.name?.trim() || c.name} updated` });
+    return this.client(c.id);
+  }
+
+  deleteClient(ref: string, by: string | null = null) {
+    const c = this.client(ref);
+    this.db.prepare("DELETE FROM clients WHERE id = ?").run(c.id);
+    this.log(by, "client.deleted", { summary: `Client ${c.name} removed (its projects are kept)` });
+  }
+
+  /**
+   * Resolve a client named by an agent: exact name/alias → that client; a look-alike → refuse with candidates
+   * (unless force); otherwise create it. Keeps "האחים כהן" and "Cohen Brothers" from becoming two clients.
+   */
+  resolveClientForAgent(name: string, by: string | null, force = false): Client {
+    const existing = this.findClient(name);
+    if (existing) return existing;
+    if (!force) {
+      const similar = this.similarClients(name);
+      if (similar.length) {
+        throw new SwarmError(
+          409,
+          "possible_duplicate_client",
+          `Client "${name}" looks like ${similar.map((m) => `"${m.client.name}"${m.client.aliases.length ? ` (aka ${m.client.aliases.join(", ")})` : ""}`).join(", ")}. Use that name, or pass client_force: true if it is a different client.`,
+          { similar: similar.map((m) => ({ id: m.client.id, name: m.client.name, score: m.score })) },
+        );
+      }
+    }
+    return this.createClient({ name }, by);
   }
 
   /** Run fn atomically; activity events are emitted after COMMIT and dropped on ROLLBACK. */
@@ -708,7 +806,7 @@ export class Service {
   }
 
   createProject(
-    input: { name: string; key?: string; description?: string; color?: string; repo_path?: string; repo_url?: string; owner?: string; brief?: string; priority?: Priority; groups?: string[]; aliases?: string[] },
+    input: { name: string; key?: string; description?: string; color?: string; repo_path?: string; repo_url?: string; owner?: string; brief?: string; priority?: Priority; groups?: string[]; aliases?: string[]; client_id?: string | null },
     by: string | null = null,
   ): Project {
     let key = (input.key || deriveKey(input.name)).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8) || "PRJ";
@@ -745,6 +843,7 @@ export class Service {
         this.db.prepare("INSERT INTO groups (id, project_id, name, color, position, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(newId("g_"), id, name, color, i, ts);
       });
       if (input.aliases?.length) this.db.prepare("UPDATE projects SET aliases = ? WHERE id = ?").run(JSON.stringify(input.aliases.map((x) => x.trim()).filter(Boolean)), id);
+      if (input.client_id) this.db.prepare("UPDATE projects SET client_id = ? WHERE id = ?").run(this.client(input.client_id).id, id);
       this.log(by, "project.created", { project_id: id, summary: `Project ${key} · ${input.name} created` });
     });
     return this.project(id);
@@ -758,7 +857,7 @@ export class Service {
   ): Project {
     const p = this.project(ref);
     const fields: Record<string, string | null> = {};
-    for (const k of ["name", "description", "color", "status", "priority", "repo_path", "repo_url", "owner", "brief", "locked_to"] as const) {
+    for (const k of ["name", "description", "color", "status", "priority", "repo_path", "repo_url", "owner", "brief", "locked_to", "client_id"] as const) {
       if (patch[k] !== undefined) fields[k] = patch[k] as string | null;
     }
     if (patch.key !== undefined && patch.key.toUpperCase() !== p.key) {
@@ -911,6 +1010,7 @@ export class Service {
       this.db.prepare("UPDATE brief_notes SET project_id = ? WHERE project_id = ?").run(into.id, from.id);
       this.db.prepare("INSERT OR IGNORE INTO project_sources (id, project_id, actor, kind, value, created_at) SELECT id, ?, actor, kind, value, created_at FROM project_sources WHERE project_id = ?").run(into.id, from.id);
       if (!into.repo_url && from.repo_url) this.db.prepare("UPDATE projects SET repo_url = ? WHERE id = ?").run(from.repo_url, into.id);
+      if (!into.client_id && from.client_id) this.db.prepare("UPDATE projects SET client_id = ? WHERE id = ?").run(from.client_id, into.id);
       if (!into.repo_path && from.repo_path) this.db.prepare("UPDATE projects SET repo_path = ? WHERE id = ?").run(from.repo_path, into.id);
       this.db.prepare("UPDATE notifications SET project_id = ? WHERE project_id = ?").run(into.id, from.id);
       this.db.prepare("UPDATE activity SET project_id = ? WHERE project_id = ?").run(into.id, from.id);

@@ -234,6 +234,19 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL
   );
   `,
+  // v5 — clients: the level above projects (client > project > tasks)
+  `
+  CREATE TABLE clients (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    aliases TEXT NOT NULL DEFAULT '[]',
+    color TEXT NOT NULL DEFAULT '#57534c',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  ALTER TABLE projects ADD COLUMN client_id TEXT REFERENCES clients(id) ON DELETE SET NULL;
+  `,
 ];
 
 export function openDb(file: string): DB {

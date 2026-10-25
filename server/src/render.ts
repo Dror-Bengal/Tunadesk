@@ -59,8 +59,15 @@ export function renderBriefing(svc: Service, actorId: string, opts: { project?: 
   out.push(`## Your open tasks (${b.my_tasks.length})`);
   out.push(b.my_tasks.length ? b.my_tasks.map((t) => taskLine(t)).join("\n") : "_None._");
   out.push("");
-  out.push("## Portfolio");
-  for (const p of b.projects) {
+  out.push("## Portfolio (by client)");
+  const clientName = (id: string | null) => (id ? (svc.findClient(id)?.name ?? "?") : "No client");
+  const ordered = [...b.projects].sort((x, y) => clientName(x.client_id).localeCompare(clientName(y.client_id)));
+  let currentClient: string | null | undefined;
+  for (const p of ordered) {
+    if (p.client_id !== currentClient) {
+      currentClient = p.client_id;
+      out.push(`### ${clientName(p.client_id)}`);
+    }
     const c = p.counts;
     const counts = ["in_progress", "review", "testing", "blocked", "todo"]
       .filter((s) => c[s])
@@ -95,8 +102,14 @@ export function renderPortfolio(svc: Service): string {
     `Tasks: ${s.in_progress ?? 0} in progress · ${(s.review ?? 0) + (s.testing ?? 0)} in review/testing · ${s.blocked ?? 0} blocked · ${s.todo ?? 0} todo · ${o.overdue} overdue · ${o.done_this_week} done this week`,
   );
   out.push("");
-  out.push("## Projects");
-  for (const p of o.projects) {
+  out.push("## Projects (by client)");
+  const cname = (id: string | null) => (id ? (svc.findClient(id)?.name ?? "?") : "No client");
+  let cur: string | null | undefined;
+  for (const p of [...o.projects].sort((x, y) => cname(x.client_id).localeCompare(cname(y.client_id)))) {
+    if (p.client_id !== cur) {
+      cur = p.client_id;
+      out.push(`### ${cname(p.client_id)}`);
+    }
     out.push(`- **${p.key}** ${p.name}${p.aliases.length ? ` (aka ${p.aliases.slice(0, 4).join(", ")})` : ""} [${p.status}·${p.priority}] ${p.open_tasks}/${p.total_tasks} open${p.owner ? ` · owner @${p.owner}` : ""}`);
     if (p.description) out.push(`  ${truncate(p.description, 200)}`);
   }
@@ -128,6 +141,7 @@ export function renderBoard(svc: Service, ref: string, opts: { include_closed?: 
   const tasks = svc.listTasks({ project: p.id, include_closed: opts.include_closed });
   const out: string[] = [`# ${p.key} · ${p.name}`, `Status: ${p.status} · Priority: ${p.priority}${p.owner ? ` · Owner: @${p.owner}` : ""}`];
   if (p.repo_path || p.repo_url) out.push(`Repo: ${[p.repo_path, p.repo_url].filter(Boolean).join(" · ")}`);
+  if (p.client_id) out.push(`Client: ${svc.findClient(p.client_id)?.name ?? "?"}`);
   if (p.aliases.length) out.push(`Also known as: ${p.aliases.join(" · ")}`);
   const sources = svc.sources(p.id);
   if (sources.length) out.push(`Known from: ${sources.map((s) => `@${s.actor ?? "?"} ${s.kind} "${s.value}"`).join(" · ")}`);
@@ -220,9 +234,12 @@ export function renderOnboarding(svc: Service, actorId: string): string {
     "Goal: put everything you are working on onto the shared desk **once** — no duplicate projects, no duplicate tasks —",
     "and connect your work to what other agents already registered. Work through the steps in order.",
     "",
+    "## Clients already on the desk",
+    svc.listClients().length ? svc.listClients().map((c) => `- ${c.name}${c.aliases.length ? ` (aka ${c.aliases.join(", ")})` : ""} — ${c.project_count} project(s)`).join("\n") : "_None yet._",
+    "",
     "## What is already on the desk",
     projects.length
-      ? projects.map((p) => `- **${p.key}** ${p.name}${p.aliases.length ? ` (aka ${p.aliases.join(", ")})` : ""}${p.repo_url ? ` · ${p.repo_url}` : ""}${p.repo_path ? ` · ${p.repo_path}` : ""} — ${p.open_tasks} open / ${p.total_tasks} tasks`).join("\n")
+      ? projects.map((p) => `- **${p.key}** ${p.name}${p.client_id ? ` [client: ${svc.findClient(p.client_id)?.name ?? "?"}]` : ""}${p.aliases.length ? ` (aka ${p.aliases.join(", ")})` : ""}${p.repo_url ? ` · ${p.repo_url}` : ""}${p.repo_path ? ` · ${p.repo_path}` : ""} — ${p.open_tasks} open / ${p.total_tasks} tasks`).join("\n")
       : "_No projects yet — you are the first._",
     "",
     `Teammates: ${teammates.map((t) => `@${t.id} (${t.kind === "human" ? "human" : `${t.platform}, ${t.role}`})`).join(", ") || "none yet"}`,
@@ -233,6 +250,8 @@ export function renderOnboarding(svc: Service, actorId: string): string {
     "1. Identify each project the way the human does: by the NAME OF THE CHAT/SESSION they gave you for it and what it is",
     "   about — not by the folder you happen to run in (sessions are often started in a generic folder). Then use the git",
     "   remote (`git remote get-url origin`) if there is one.",
+    "   Projects belong to a CLIENT (customer / umbrella, e.g. \"האחים כהן\"). Pass `client` when you create a project, or set it",
+    "   with `update_project` — reuse the exact client names already on the desk (see the portfolio) instead of inventing new ones.",
     "2. Find it in the list above (names and aliases), or ask the desk with `find_similar_projects`. If it exists, use it and",
     "   record your session name with `add_project_alias`.",
     "3. Only if it is really missing, call `create_project` with `name`, `session_name`, `folder`, and `repo_url`/`repo_path`",

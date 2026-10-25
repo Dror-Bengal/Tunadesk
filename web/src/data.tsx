@@ -1,12 +1,14 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { useApi } from "./api";
-import type { Actor, Me, Project } from "./types";
+import type { Actor, Client, Me, Project } from "./types";
 
 interface Desk {
   me: Me | undefined;
   actors: Actor[];
   agents: Actor[];
   projects: Project[];
+  clients: Client[];
+  client: (id: string | null | undefined) => Client | undefined;
   actor: (id: string | null | undefined) => Actor | undefined;
   project: (idOrKey: string | null | undefined) => Project | undefined;
   ready: boolean;
@@ -19,6 +21,7 @@ export function DeskProvider({ children }: { children: ReactNode }) {
   const me = useApi<Me>("/api/me");
   const actors = useApi<Actor[]>("/api/actors");
   const projects = useApi<Project[]>("/api/projects");
+  const clients = useApi<Client[]>("/api/clients");
   const value = useMemo<Desk>(() => {
     const list = actors.data ?? [];
     const plist = projects.data ?? [];
@@ -28,11 +31,13 @@ export function DeskProvider({ children }: { children: ReactNode }) {
       actors: list,
       agents: list.filter((a) => a.kind === "agent"),
       projects: plist,
+      clients: clients.data ?? [],
+      client: (id) => (id ? (clients.data ?? []).find((c) => c.id === id) : undefined),
       actor: (id) => (id ? byId.get(id) : undefined),
       project: (ref) => (ref ? plist.find((p) => p.id === ref || p.key.toLowerCase() === ref.toLowerCase()) : undefined),
       ready: Boolean(me.data && actors.data && projects.data),
     };
-  }, [me.data, actors.data, projects.data]);
+  }, [me.data, actors.data, projects.data, clients.data]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

@@ -82,6 +82,7 @@ export interface Project {
   brief_evidence: string;
   locked_to: string | null;
   aliases: string[];
+  client_id: string | null;
   created_at: string;
   updated_at: string;
   counts?: Record<string, number>;
@@ -131,6 +132,15 @@ export interface Task {
   comment_count: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface Client {
+  id: string;
+  name: string;
+  aliases: string[];
+  color: string;
+  notes: string;
+  project_count?: number;
 }
 
 export interface BriefNote {

@@ -107,6 +107,9 @@ const projectCreate = z.object({
   /** Where the calling agent knows this project from. The session name also becomes an alias. */
   session_name: z.string().max(200).optional(),
   folder: z.string().max(500).optional(),
+  /** Client (customer / umbrella) name or id; created when new. */
+  client: z.string().max(120).nullable().optional(),
+  client_force: z.boolean().optional(),
 });
 const projectPatch = projectCreate
   .omit({ groups: true, force: true, session_name: true, folder: true })
@@ -400,8 +403,9 @@ export function createApp(svc: Service, config: AppConfig) {
   // projects
   api.get("/projects", (c) => c.json(svc.listProjects({ include_archived: c.req.query("archived") === "1" })));
   api.post("/projects", async (c) => {
-    const { force, session_name, folder, ...b } = await body(c, projectCreate);
+    const { force, session_name, folder, client, client_force, ...b } = await body(c, projectCreate);
     const me = c.get("actor").id;
+    const clientId = client ? svc.resolveClientForAgent(client, me, client_force || c.get("actor").kind === "human").id : undefined;
     const names = [b.name, ...(b.aliases ?? []), ...(session_name ? [session_name] : [])];
     const remember = (projectId: string) => {
       // How this agent knows the project: next time the session name alone finds it.
@@ -413,7 +417,10 @@ export function createApp(svc: Service, config: AppConfig) {
     };
     // Several agents describe the same project: hand back the existing one instead of a twin.
     const existing = force ? null : svc.findDuplicateProject({ ...b, aliases: names });
-    if (existing) return c.json({ ...remember(existing.id), existing: true }, 200);
+    if (existing) {
+      if (clientId && !existing.client_id) svc.updateProject(existing.id, { client_id: clientId }, me);
+      return c.json({ ...remember(existing.id), existing: true }, 200);
+    }
     if (!force) {
       const similar = svc.similarProjects(names, { repo_url: b.repo_url });
       if (similar.length) {
@@ -426,8 +433,27 @@ export function createApp(svc: Service, config: AppConfig) {
         );
       }
     }
-    const created = svc.createProject({ ...b, aliases: b.aliases }, me);
+    const created = svc.createProject({ ...b, aliases: b.aliases, client_id: clientId }, me);
     return c.json(remember(created.id), 201);
+  });
+  // clients (client > project > tasks)
+  api.get("/clients", (c) => c.json(svc.listClients()));
+  api.post("/clients", async (c) => {
+    const b = await body(c, z.object({ name: z.string().min(1).max(120), aliases: z.array(z.string().max(120)).max(30).optional(), color: z.string().max(20).optional(), notes: z.string().max(20_000).optional() }));
+    return c.json(svc.createClient(b, c.get("actor").id), 201);
+  });
+  api.patch("/clients/:id", async (c) => {
+    const b = await body(
+      c,
+      z.object({ name: z.string().min(1).max(120).optional(), aliases: z.array(z.string().max(120)).max(30).optional(), add_aliases: z.array(z.string().max(120)).max(30).optional(), color: z.string().max(20).optional(), notes: z.string().max(20_000).optional() }),
+    );
+    if (c.get("actor").kind !== "human" && (b.name !== undefined || b.aliases !== undefined)) throw forbidden("Agents can only add aliases or notes to a client");
+    return c.json(svc.updateClient(c.req.param("id"), b, c.get("actor").id));
+  });
+  api.delete("/clients/:id", (c) => {
+    requireHuman(c);
+    svc.deleteClient(c.req.param("id"), c.get("actor").id);
+    return c.json({ ok: true });
   });
   api.get("/projects/similar", (c) => {
     const name = c.req.query("name");
@@ -444,7 +470,10 @@ export function createApp(svc: Service, config: AppConfig) {
   });
   api.get("/projects/:ref/board.md", (c) => md(c, renderBoard(svc, c.req.param("ref"), { include_closed: c.req.query("closed") === "1" })));
   api.patch("/projects/:ref", async (c) => {
-    const { as_of, evidence, merged_notes, add_aliases, ...b } = await body(c, projectPatch);
+    const { as_of, evidence, merged_notes, add_aliases, client, client_force, ...b } = await body(c, projectPatch);
+    if (client !== undefined) {
+      (b as { client_id?: string | null }).client_id = client === null || client === "" ? null : svc.resolveClientForAgent(client, c.get("actor").id, client_force || c.get("actor").kind === "human").id;
+    }
     if (b.aliases !== undefined && c.get("actor").kind !== "human") throw forbidden("Agents add aliases with add_aliases; only humans replace the list");
     if (add_aliases?.length) svc.addAliases(c.req.param("ref"), add_aliases, c.get("actor").id);
     if (b.locked_to !== undefined && c.get("actor").kind !== "human") throw forbidden("Only humans lock a project's brief");

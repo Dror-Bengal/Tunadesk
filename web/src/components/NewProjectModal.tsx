@@ -5,6 +5,8 @@ import { navigate } from "../router";
 import { PALETTE } from "../format";
 import { PRIORITIES, type Priority, type Project } from "../types";
 import { Modal, useAction, useToast } from "./ui";
+import { useDesk } from "../data";
+import { ClientSelect } from "../pages/Project";
 
 export function NewProjectModal({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
@@ -16,6 +18,8 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
   const [repoPath, setRepoPath] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
   const [priority, setPriority] = useState<Priority>("medium");
+  const { clients } = useDesk();
+  const [client, setClient] = useState("");
   const [color, setColor] = useState(PALETTE[Math.floor(Math.random() * PALETTE.length)]);
   const [busy, setBusy] = useState(false);
 
@@ -25,7 +29,7 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
     setBusy(true);
     let p: (Project & { existing?: boolean }) | undefined;
     try {
-      p = await post<Project & { existing?: boolean }>("/api/projects", { name: name.trim(), key: key.trim() || undefined, description, repo_path: repoPath.trim(), repo_url: repoUrl.trim(), priority, color, force });
+      p = await post<Project & { existing?: boolean }>("/api/projects", { name: name.trim(), key: key.trim() || undefined, description, repo_path: repoPath.trim(), repo_url: repoUrl.trim(), priority, color, force, client: client || undefined });
     } catch (e) {
       setBusy(false);
       if (e instanceof ApiError && e.code === "possible_duplicate_project") {
@@ -106,6 +110,10 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
             </span>
             <input className="input" value={key} maxLength={8} placeholder="WEB" onChange={(e) => setKey(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))} />
           </label>
+        </div>
+        <div className="field">
+          <span>{t("client.label")}</span>
+          <ClientSelect value={client} clients={clients} onChange={setClient} />
         </div>
         <label className="field">
           <span>{t("common.description")}</span>

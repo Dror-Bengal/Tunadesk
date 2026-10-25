@@ -147,13 +147,22 @@ function Shell() {
           </button>
         </div>
         <nav className="nav projects-nav">
-          {desk.projects.map((p) => (
-            <a key={p.id} href={href(`/p/${p.key}`)} className={section === "p" && rest[0]?.toUpperCase() === p.key ? "active" : ""} style={{ opacity: p.status === "active" ? 1 : 0.6 }}>
-              <span className="project-dot" style={{ background: p.color }} />
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
-              <span className="key">{p.key}</span>
-            </a>
-          ))}
+          {[...desk.clients.map((c) => ({ id: c.id, name: c.name })), { id: null as string | null, name: desk.clients.length ? t("client.none") : "" }].map((group) => {
+            const list = desk.projects.filter((p) => (p.client_id ?? null) === group.id);
+            if (!list.length) return null;
+            return (
+              <div key={group.id ?? "none"} className="client-group">
+                {group.name && <div className="client-label">{group.name}</div>}
+                {list.map((p) => (
+                  <a key={p.id} href={href(`/p/${p.key}`)} className={section === "p" && rest[0]?.toUpperCase() === p.key ? "active" : ""} style={{ opacity: p.status === "active" ? 1 : 0.6 }}>
+                    <span className="project-dot" style={{ background: p.color }} />
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+                    <span className="key">{p.key}</span>
+                  </a>
+                ))}
+              </div>
+            );
+          })}
         </nav>
         <nav className="nav" style={{ paddingBottom: 8 }}>
           {navLink("/settings", "gear", t("nav.settings"), section === "settings")}

@@ -2030,3 +2030,13 @@ input[type="checkbox"] {
   margin-bottom: 12px;
   border-bottom: 1px solid var(--border);
 }
+
+.client-group + .client-group {
+  margin-top: 6px;
+}
+.client-label {
+  padding: 8px 10px 3px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-3);
+}

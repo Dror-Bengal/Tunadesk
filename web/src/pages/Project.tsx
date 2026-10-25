@@ -60,6 +60,7 @@ export function ProjectPage({ projectKey, view }: { projectKey: string; view: st
               {t(`priority.${project.priority}` as MessageKey)}
             </Pill>
           </h1>
+          {project.client_id && <p style={{ fontSize: 13, margin: "2px 0 0", color: "var(--text-2)" }}>{desk.client(project.client_id)?.name}</p>}
           {project.description && <p>{project.description}</p>}
           {project.aliases.length > 0 && (
             <p style={{ fontSize: 13, color: "var(--text-3)" }} dir="auto">
@@ -814,6 +815,34 @@ function ActivityView({ project }: { project: string }) {
   );
 }
 
+// ------------------------------------------------------------------ clients
+export function ClientSelect({ value, clients, onChange }: { value: string; clients: Array<{ id: string; name: string }>; onChange: (v: string) => void }) {
+  const { t } = useI18n();
+  return (
+    <select
+      className="select"
+      value={value}
+      onChange={(e) => {
+        if (e.target.value === "__new") {
+          const name = prompt(t("client.newPrompt"))?.trim();
+          if (name) onChange(name);
+          return;
+        }
+        onChange(e.target.value);
+      }}
+    >
+      <option value="">{t("client.none")}</option>
+      {clients.map((c) => (
+        <option key={c.id} value={c.id}>
+          {c.name}
+        </option>
+      ))}
+      {value && !clients.some((c) => c.id === value) && <option value={value}>{value}</option>}
+      <option value="__new">{t("client.new")}</option>
+    </select>
+  );
+}
+
 // ------------------------------------------------------------------ settings
 function ProjectSettings({ project, onClose }: { project: Project; onClose: () => void }) {
   const { t } = useI18n();
@@ -829,8 +858,9 @@ function ProjectSettings({ project, onClose }: { project: Project; onClose: () =
     owner: project.owner,
     locked_to: project.locked_to,
     aliases: project.aliases.join("\n"),
+    client: project.client_id ?? "",
   });
-  const { projects } = useDesk();
+  const { projects, clients } = useDesk();
   const [mergeInto, setMergeInto] = useState("");
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
   return (
@@ -861,7 +891,8 @@ function ProjectSettings({ project, onClose }: { project: Project; onClose: () =
             className="btn primary"
             onClick={async () => {
               const aliases = form.aliases.split("\n").map((x) => x.trim()).filter(Boolean);
-              const ok = await run(() => patch(`/api/projects/${project.key}`, { ...form, aliases }), t("settings.saved"));
+              const { client, ...rest } = form;
+              const ok = await run(() => patch(`/api/projects/${project.key}`, { ...rest, aliases, client: client || null }), t("settings.saved"));
               if (ok) {
                 invalidate();
                 onClose();
@@ -931,6 +962,10 @@ function ProjectSettings({ project, onClose }: { project: Project; onClose: () =
             ))}
           </div>
         </div>
+      </div>
+      <div className="field">
+        <span>{t("client.label")}</span>
+        <ClientSelect value={form.client} clients={clients} onChange={(v) => set("client", v)} />
       </div>
       <div className="field">
         <span>{t("project.briefMaintainer")}</span>
