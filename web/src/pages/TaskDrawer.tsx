@@ -62,6 +62,8 @@ export function TaskDrawer({ taskKey }: { taskKey: string }) {
           <PopoverButton className="icon-btn" label={t("common.more")} button={<Icon name="more" />}>
             {(close) => (
               <div className="menu">
+                <MoveTaskMenu taskKey={task.key} currentProject={task.project_key} close={close} />
+                <div className="sep" />
                 <button
                   className="danger"
                   onClick={async () => {
@@ -334,6 +336,41 @@ export function TaskDrawer({ taskKey }: { taskKey: string }) {
       {handoff && <HandoffModal detail={data} onClose={() => setHandoff(false)} />}
       {addSub && project.data && <NewTaskModal project={project.data.project} groups={project.data.groups} parent={task} onClose={() => setAddSub(false)} />}
     </Drawer>
+  );
+}
+
+function MoveTaskMenu({ taskKey, currentProject, close }: { taskKey: string; currentProject: string; close: () => void }) {
+  const { t } = useI18n();
+  const run = useAction();
+  const { projects } = useDesk();
+  return (
+    <>
+      <div style={{ padding: "4px 9px", fontSize: 12, color: "var(--text-3)" }}>{t("task.moveTo")}</div>
+      <select
+        className="select"
+        style={{ margin: "0 4px 4px", width: "calc(100% - 8px)" }}
+        defaultValue=""
+        onChange={async (e) => {
+          const to = e.target.value;
+          if (!to) return;
+          close();
+          const moved = await run(() => post<{ key: string }>(`/api/tasks/${taskKey}/move`, { project: to }));
+          if (moved) {
+            invalidate();
+            openTask(moved.key);
+          }
+        }}
+      >
+        <option value="">—</option>
+        {projects
+          .filter((p) => p.key !== currentProject)
+          .map((p) => (
+            <option key={p.id} value={p.key}>
+              {p.key} · {p.name}
+            </option>
+          ))}
+      </select>
+    </>
   );
 }
 

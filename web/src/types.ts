@@ -81,6 +81,7 @@ export interface Project {
   brief_by: string | null;
   brief_evidence: string;
   locked_to: string | null;
+  aliases: string[];
   created_at: string;
   updated_at: string;
   counts?: Record<string, number>;

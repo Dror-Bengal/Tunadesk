@@ -78,8 +78,19 @@ export interface Project {
   brief_evidence: string;
   /** When set, only this actor (or a human) may replace the brief. */
   locked_to: string | null;
+  /** Other names the project goes by: chat session names, Hebrew/English names, nicknames. */
+  aliases: string[];
   created_at: string;
   updated_at: string;
+}
+
+export interface ProjectSource {
+  id: string;
+  project_id: string;
+  actor: string | null;
+  kind: "session" | "folder" | "repo" | "other";
+  value: string;
+  created_at: string;
 }
 
 export interface BriefNote {
@@ -258,6 +269,11 @@ export function parseAsOf(value: string): string {
   if (Number.isNaN(d.getTime())) throw badRequest(`as_of must be a date like 2026-10-20 (got "${value}")`);
   const ceiling = Date.now() + 60_000;
   return new Date(Math.min(d.getTime(), ceiling)).toISOString();
+}
+
+/** Folders that say nothing about which project a session was about. */
+function isGenericFolder(path: string): boolean {
+  return /^\/(users|home)\/[^/]+(\/(desktop|documents|downloads|projects|code|dev|src|work|repos|github))?$/i.test(path) || path === "/";
 }
 
 export class Service {
@@ -581,7 +597,7 @@ export class Service {
       .all() as Row[];
     const counts = this.db.prepare("SELECT project_id, status, COUNT(*) AS n FROM tasks GROUP BY project_id, status").all() as Row[];
     return rows.map((r) => {
-      const p = plain<Project>(r);
+      const p = this.mapProject(r);
       const c: Record<string, number> = {};
       let open = 0;
       let total = 0;
@@ -595,9 +611,18 @@ export class Service {
     });
   }
 
+  private mapProject(r: Row): Project {
+    return { ...plain<Project>(r), aliases: parseJson<string[]>(r.aliases as string, []) };
+  }
+
   findProject(ref: string): Project | null {
-    const r = this.db.prepare("SELECT * FROM projects WHERE id = ? OR key = ? COLLATE NOCASE").get(ref, ref) as Row | undefined;
-    return r ? plain<Project>(r) : null;
+    let r = this.db.prepare("SELECT * FROM projects WHERE id = ? OR key = ? COLLATE NOCASE").get(ref, ref) as Row | undefined;
+    if (!r) {
+      // Keys of merged projects keep working.
+      const red = this.db.prepare("SELECT target_id FROM key_redirects WHERE old_key = ? AND kind = 'project'").get(ref) as Row | undefined;
+      if (red) r = this.db.prepare("SELECT * FROM projects WHERE id = ?").get(red.target_id as string) as Row | undefined;
+    }
+    return r ? this.mapProject(r) : null;
   }
 
   project(ref: string): Project {
@@ -607,19 +632,67 @@ export class Service {
   }
 
   /** An existing project that is clearly the same one: same git remote, same folder, or same name. */
-  findDuplicateProject(input: { name: string; key?: string; repo_url?: string; repo_path?: string }): Project | null {
+  findDuplicateProject(input: { name: string; key?: string; repo_url?: string; repo_path?: string; aliases?: string[] }): Project | null {
     const url = normalizeRepoUrl(input.repo_url);
     const path = normalizePath(input.repo_path);
-    const name = normalizeName(input.name);
+    const names = new Set([input.name, ...(input.aliases ?? [])].map(normalizeName).filter(Boolean));
     const all = this.listProjects({ include_archived: true });
+    const known = (p: Project) => [p.name, p.key, ...p.aliases].map(normalizeName);
     return (
       (url && all.find((p) => normalizeRepoUrl(p.repo_url) === url)) ||
-      (path && all.find((p) => normalizePath(p.repo_path) === path)) ||
+      // A folder only identifies a project when it is not a generic place like a home or Downloads folder.
+      (path && !isGenericFolder(path) && all.find((p) => normalizePath(p.repo_path) === path)) ||
       (input.key && all.find((p) => p.key === input.key!.toUpperCase().replace(/[^A-Z0-9]/g, ""))) ||
-      // Same name only counts when the remotes don't contradict it (two different repos may share a name).
-      all.find((p) => normalizeName(p.name) === name && !(url && p.repo_url && normalizeRepoUrl(p.repo_url) !== url)) ||
+      // Same name or alias only counts when the remotes don't contradict it (two different repos may share a name).
+      all.find((p) => known(p).some((n) => names.has(n)) && !(url && p.repo_url && normalizeRepoUrl(p.repo_url) !== url)) ||
       null
     );
+  }
+
+  /** Projects whose name or aliases look like the given names (fuzzy, Hebrew + English). */
+  similarProjects(names: string[], opts: { threshold?: number; exclude?: string; repo_url?: string } = {}): Array<{ project: Project; score: number; matched: string }> {
+    const out: Array<{ project: Project; score: number; matched: string }> = [];
+    const url = normalizeRepoUrl(opts.repo_url);
+    for (const p of this.listProjects({ include_archived: false })) {
+      if (p.id === opts.exclude) continue;
+      // Different git remotes are different projects, however alike the names.
+      if (url && p.repo_url && normalizeRepoUrl(p.repo_url) !== url) continue;
+      let best = { score: 0, matched: "" };
+      for (const mine of names) {
+        for (const theirs of [p.name, ...p.aliases]) {
+          const score = titleSimilarity(mine, theirs);
+          if (score > best.score) best = { score, matched: theirs };
+        }
+      }
+      if (best.score >= (opts.threshold ?? 0.6)) out.push({ project: p, ...best });
+    }
+    return out.sort((a, b) => b.score - a.score).slice(0, 5);
+  }
+
+  addAliases(projectRef: string, aliases: string[], by: string | null): Project {
+    const p = this.project(projectRef);
+    const merged = [...p.aliases];
+    for (const a of aliases.map((x) => x.trim()).filter(Boolean)) {
+      if (![p.name, p.key, ...merged].some((x) => normalizeName(x) === normalizeName(a))) merged.push(a.slice(0, 120));
+    }
+    if (merged.length !== p.aliases.length) {
+      this.db.prepare("UPDATE projects SET aliases = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(merged), now(), p.id);
+      this.log(by, "project.aliases", { project_id: p.id, summary: `${p.key} is also known as: ${merged.slice(p.aliases.length).join(", ")}` });
+    }
+    return this.project(p.id);
+  }
+
+  addSource(projectRef: string, by: string | null, kind: ProjectSource["kind"], value: string) {
+    const p = this.project(projectRef);
+    if (!value.trim()) return;
+    this.db
+      .prepare("INSERT OR IGNORE INTO project_sources (id, project_id, actor, kind, value, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(newId("ps_"), p.id, by, kind, value.trim().slice(0, 500), now());
+  }
+
+  sources(projectRef: string): ProjectSource[] {
+    const p = this.project(projectRef);
+    return (this.db.prepare("SELECT * FROM project_sources WHERE project_id = ? ORDER BY created_at").all(p.id) as Row[]).map((r) => plain<ProjectSource>(r));
   }
 
   /** Open (or recently finished) tasks in the project whose titles look like the same work. */
@@ -635,7 +708,7 @@ export class Service {
   }
 
   createProject(
-    input: { name: string; key?: string; description?: string; color?: string; repo_path?: string; repo_url?: string; owner?: string; brief?: string; priority?: Priority; groups?: string[] },
+    input: { name: string; key?: string; description?: string; color?: string; repo_path?: string; repo_url?: string; owner?: string; brief?: string; priority?: Priority; groups?: string[]; aliases?: string[] },
     by: string | null = null,
   ): Project {
     let key = (input.key || deriveKey(input.name)).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8) || "PRJ";
@@ -671,6 +744,7 @@ export class Service {
       groups.forEach(([name, color], i) => {
         this.db.prepare("INSERT INTO groups (id, project_id, name, color, position, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(newId("g_"), id, name, color, i, ts);
       });
+      if (input.aliases?.length) this.db.prepare("UPDATE projects SET aliases = ? WHERE id = ?").run(JSON.stringify(input.aliases.map((x) => x.trim()).filter(Boolean)), id);
       this.log(by, "project.created", { project_id: id, summary: `Project ${key} · ${input.name} created` });
     });
     return this.project(id);
@@ -758,6 +832,114 @@ export class Service {
     this.log(by, "project.brief_notes_merged", { project_id: projectId, summary: `${ids.length} brief note(s) merged` });
   }
 
+  /** Move a task (and its sub-tasks) to another project. The old key keeps working as a redirect. */
+  moveTask(ref: string, toProject: string, by: string | null, opts: { group?: string } = {}): Task {
+    const t = this.taskRow(ref);
+    const target = this.project(toProject);
+    this.assertNotLeasedByOther(t, by);
+    if (t.project_id === target.id) {
+      if (opts.group) this.updateTask(t.id as string, { group: opts.group }, by);
+      return this.task(t.id as string);
+    }
+    return this.tx(() => {
+      this.moveTaskInternal(t, target, by, opts.group);
+      return this.task(t.id as string);
+    });
+  }
+
+  private moveTaskInternal(t: Row, target: Project, by: string | null, groupRef?: string) {
+    const from = this.project(t.project_id as string);
+    const groups = this.groups(target.id);
+    const oldGroup = t.group_id ? (this.db.prepare("SELECT name FROM groups WHERE id = ?").get(t.group_id as string) as Row | undefined) : undefined;
+    const group =
+      (groupRef && groups.find((g) => g.id === groupRef || g.name.toLowerCase() === groupRef.toLowerCase())) ||
+      (oldGroup && groups.find((g) => g.name.toLowerCase() === String(oldGroup.name).toLowerCase())) ||
+      groups[0];
+    const ts = now();
+    this.db.prepare("UPDATE projects SET task_seq = task_seq + 1, updated_at = ? WHERE id = ?").run(ts, target.id);
+    const seq = Number((this.db.prepare("SELECT task_seq FROM projects WHERE id = ?").get(target.id) as Row).task_seq);
+    const key = `${target.key}-${seq}`;
+    this.db
+      .prepare("UPDATE tasks SET project_id = ?, number = ?, key = ?, group_id = ?, updated_at = ? WHERE id = ?")
+      .run(target.id, seq, key, group?.id ?? null, ts, t.id as string);
+    this.db.prepare("INSERT OR REPLACE INTO key_redirects (old_key, kind, target_id, created_at) VALUES (?, 'task', ?, ?)").run(t.key as string, t.id as string, ts);
+    this.db.prepare("UPDATE notifications SET project_id = ? WHERE task_id = ?").run(target.id, t.id as string);
+    this.log(by, "task.moved", {
+      project_id: target.id,
+      task_id: t.id as string,
+      summary: `${t.key} moved from ${from.key} to ${target.key} as ${key}`,
+      data: { from: t.key, to: key },
+    });
+    for (const child of this.db.prepare("SELECT * FROM tasks WHERE parent_id = ? AND project_id = ?").all(t.id as string, from.id) as Row[]) {
+      this.moveTaskInternal(child, target, by, group?.id);
+    }
+  }
+
+  /**
+   * Fold one project into another: tasks (re-keyed, old keys redirect), decisions, brief (or a note with it),
+   * notes, sources and names (as aliases). The merged project's key keeps resolving to the target.
+   */
+  mergeProject(fromRef: string, intoRef: string, by: string | null): { project: Project; moved_tasks: Array<{ from: string; to: string }> } {
+    const from = this.project(fromRef);
+    const into = this.project(intoRef);
+    if (from.id === into.id) throw badRequest("A project cannot be merged into itself");
+    const moved: Array<{ from: string; to: string }> = [];
+    this.tx(() => {
+      const roots = this.db
+        .prepare("SELECT * FROM tasks WHERE project_id = ? AND (parent_id IS NULL OR parent_id NOT IN (SELECT id FROM tasks WHERE project_id = ?)) ORDER BY number")
+        .all(from.id, from.id) as Row[];
+      for (const r of roots) this.moveTaskInternal(r, into, by);
+      for (const red of this.db.prepare("SELECT old_key, target_id FROM key_redirects WHERE kind = 'task'").all() as Row[]) {
+        const now_ = this.db.prepare("SELECT key, project_id FROM tasks WHERE id = ?").get(red.target_id as string) as Row | undefined;
+        if (now_?.project_id === into.id && String(red.old_key).toUpperCase().startsWith(`${from.key}-`)) moved.push({ from: red.old_key as string, to: now_.key as string });
+      }
+      let n = Number((this.db.prepare("SELECT COALESCE(MAX(number), 0) AS m FROM decisions WHERE project_id = ?").get(into.id) as Row).m);
+      for (const d of this.db.prepare("SELECT id FROM decisions WHERE project_id = ? ORDER BY number").all(from.id) as Row[]) {
+        this.db.prepare("UPDATE decisions SET project_id = ?, number = ? WHERE id = ?").run(into.id, ++n, d.id as string);
+      }
+      if (from.brief.trim()) {
+        if (!into.brief.trim()) {
+          this.db
+            .prepare("UPDATE projects SET brief = ?, brief_as_of = ?, brief_by = ?, brief_evidence = ? WHERE id = ?")
+            .run(from.brief, from.brief_as_of, from.brief_by, from.brief_evidence || `merged from ${from.key}`, into.id);
+        } else {
+          this.db
+            .prepare("INSERT INTO brief_notes (id, project_id, author, body, as_of, evidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .run(newId("bn_"), into.id, from.brief_by, `Brief of ${from.key} · ${from.name} (merged into this project):\n\n${from.brief}`, from.brief_as_of, `merged from ${from.key}`, now());
+        }
+      }
+      this.db.prepare("UPDATE brief_notes SET project_id = ? WHERE project_id = ?").run(into.id, from.id);
+      this.db.prepare("INSERT OR IGNORE INTO project_sources (id, project_id, actor, kind, value, created_at) SELECT id, ?, actor, kind, value, created_at FROM project_sources WHERE project_id = ?").run(into.id, from.id);
+      if (!into.repo_url && from.repo_url) this.db.prepare("UPDATE projects SET repo_url = ? WHERE id = ?").run(from.repo_url, into.id);
+      if (!into.repo_path && from.repo_path) this.db.prepare("UPDATE projects SET repo_path = ? WHERE id = ?").run(from.repo_path, into.id);
+      this.db.prepare("UPDATE notifications SET project_id = ? WHERE project_id = ?").run(into.id, from.id);
+      this.db.prepare("UPDATE activity SET project_id = ? WHERE project_id = ?").run(into.id, from.id);
+      this.db.prepare("UPDATE key_redirects SET target_id = ? WHERE kind = 'project' AND target_id = ?").run(into.id, from.id);
+      this.db.prepare("INSERT OR REPLACE INTO key_redirects (old_key, kind, target_id, created_at) VALUES (?, 'project', ?, ?)").run(from.key, into.id, now());
+      this.db.prepare("DELETE FROM projects WHERE id = ?").run(from.id);
+      this.addAliases(into.id, [from.name, ...from.aliases], by);
+      this.log(by, "project.merged", {
+        project_id: into.id,
+        summary: `${from.key} · ${from.name} merged into ${into.key} (${moved.length} task(s) moved)`,
+        data: { from: from.key, moved },
+      });
+      if (!this.isHuman(by)) {
+        this.notify(this.settings().owner, "comment", { sender: by, project_id: into.id, message: `@${by} merged ${from.key} · ${from.name} into ${into.key} · ${into.name}.` });
+      }
+    });
+    return { project: this.project(into.id), moved_tasks: moved };
+  }
+
+  /** Likely duplicates of a new task: same project, or (stricter) any other active project. */
+  similarTasksAnywhere(projectRef: string, title: string): Array<{ task: Task; score: number }> {
+    const p = this.project(projectRef);
+    const here = this.similarTasks(p.id, title);
+    const elsewhere = this.listProjects()
+      .filter((x) => x.id !== p.id && x.status === "active")
+      .flatMap((x) => this.similarTasks(x.id, title, { threshold: 0.8, limit: 3 }));
+    return [...here, ...elsewhere].sort((a, b) => b.score - a.score).slice(0, 5);
+  }
+
   deleteProject(ref: string, by: string | null = null) {
     const p = this.project(ref);
     this.db.prepare("DELETE FROM projects WHERE id = ?").run(p.id);
@@ -814,7 +996,12 @@ export class Service {
   // -------------------------------------------------------------------------
 
   private taskRow(ref: string): Row {
-    const r = this.db.prepare("SELECT * FROM tasks WHERE id = ? OR key = ? COLLATE NOCASE").get(ref, ref) as Row | undefined;
+    let r = this.db.prepare("SELECT * FROM tasks WHERE id = ? OR key = ? COLLATE NOCASE").get(ref, ref) as Row | undefined;
+    if (!r) {
+      // Keys of moved tasks keep working.
+      const red = this.db.prepare("SELECT target_id FROM key_redirects WHERE old_key = ? AND kind = 'task'").get(ref) as Row | undefined;
+      if (red) r = this.db.prepare("SELECT * FROM tasks WHERE id = ?").get(red.target_id as string) as Row | undefined;
+    }
     if (!r) throw notFound(`Task '${ref}'`);
     return r;
   }

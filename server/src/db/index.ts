@@ -214,6 +214,26 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX brief_notes_project ON brief_notes(project_id, created_at);
   `,
+  // v4 — project identity beyond folders: aliases (e.g. chat session names), where each agent knows a project
+  // from, and redirects so old keys keep working after a task move or a project merge
+  `
+  ALTER TABLE projects ADD COLUMN aliases TEXT NOT NULL DEFAULT '[]';
+  CREATE TABLE project_sources (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    actor TEXT REFERENCES actors(id) ON DELETE SET NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('session','folder','repo','other')),
+    value TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (project_id, actor, kind, value)
+  );
+  CREATE TABLE key_redirects (
+    old_key TEXT PRIMARY KEY COLLATE NOCASE,
+    kind TEXT NOT NULL CHECK (kind IN ('task','project')),
+    target_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  `,
 ];
 
 export function openDb(file: string): DB {

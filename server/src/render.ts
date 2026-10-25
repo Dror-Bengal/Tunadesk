@@ -66,7 +66,7 @@ export function renderBriefing(svc: Service, actorId: string, opts: { project?: 
       .filter((s) => c[s])
       .map((s) => `${c[s]} ${s}`)
       .join(", ");
-    out.push(`- **${p.key}** ${p.name} [${p.status}·${p.priority}] — ${p.open_tasks} open${counts ? ` (${counts})` : ""}${p.repo_path ? ` · repo ${p.repo_path}` : ""}`);
+    out.push(`- **${p.key}** ${p.name}${p.aliases.length ? ` (aka ${p.aliases.slice(0, 4).join(", ")})` : ""} [${p.status}·${p.priority}] — ${p.open_tasks} open${counts ? ` (${counts})` : ""}${p.repo_path ? ` · repo ${p.repo_path}` : ""}`);
     if (p.brief) out.push(`  ${truncate(p.brief.replace(/\s+/g, " "), 220)}`);
   }
   if (!b.projects.length) out.push("_No active projects._");
@@ -97,7 +97,7 @@ export function renderPortfolio(svc: Service): string {
   out.push("");
   out.push("## Projects");
   for (const p of o.projects) {
-    out.push(`- **${p.key}** ${p.name} [${p.status}·${p.priority}] ${p.open_tasks}/${p.total_tasks} open${p.owner ? ` · owner @${p.owner}` : ""}`);
+    out.push(`- **${p.key}** ${p.name}${p.aliases.length ? ` (aka ${p.aliases.slice(0, 4).join(", ")})` : ""} [${p.status}·${p.priority}] ${p.open_tasks}/${p.total_tasks} open${p.owner ? ` · owner @${p.owner}` : ""}`);
     if (p.description) out.push(`  ${truncate(p.description, 200)}`);
   }
   out.push("");
@@ -128,6 +128,9 @@ export function renderBoard(svc: Service, ref: string, opts: { include_closed?: 
   const tasks = svc.listTasks({ project: p.id, include_closed: opts.include_closed });
   const out: string[] = [`# ${p.key} · ${p.name}`, `Status: ${p.status} · Priority: ${p.priority}${p.owner ? ` · Owner: @${p.owner}` : ""}`];
   if (p.repo_path || p.repo_url) out.push(`Repo: ${[p.repo_path, p.repo_url].filter(Boolean).join(" · ")}`);
+  if (p.aliases.length) out.push(`Also known as: ${p.aliases.join(" · ")}`);
+  const sources = svc.sources(p.id);
+  if (sources.length) out.push(`Known from: ${sources.map((s) => `@${s.actor ?? "?"} ${s.kind} "${s.value}"`).join(" · ")}`);
   if (p.description) out.push("", p.description);
   out.push("", "## Brief (project memory)");
   if (p.brief_as_of) out.push(`_Knowledge as of ${p.brief_as_of.slice(0, 10)} · by @${p.brief_by ?? "?"}${p.brief_evidence ? ` · ${p.brief_evidence}` : ""}${p.locked_to ? ` · maintained by @${p.locked_to}` : ""}_`);
@@ -219,7 +222,7 @@ export function renderOnboarding(svc: Service, actorId: string): string {
     "",
     "## What is already on the desk",
     projects.length
-      ? projects.map((p) => `- **${p.key}** ${p.name}${p.repo_url ? ` · ${p.repo_url}` : ""}${p.repo_path ? ` · ${p.repo_path}` : ""} — ${p.open_tasks} open / ${p.total_tasks} tasks`).join("\n")
+      ? projects.map((p) => `- **${p.key}** ${p.name}${p.aliases.length ? ` (aka ${p.aliases.join(", ")})` : ""}${p.repo_url ? ` · ${p.repo_url}` : ""}${p.repo_path ? ` · ${p.repo_path}` : ""} — ${p.open_tasks} open / ${p.total_tasks} tasks`).join("\n")
       : "_No projects yet — you are the first._",
     "",
     `Teammates: ${teammates.map((t) => `@${t.id} (${t.kind === "human" ? "human" : `${t.platform}, ${t.role}`})`).join(", ") || "none yet"}`,
@@ -227,13 +230,21 @@ export function renderOnboarding(svc: Service, actorId: string): string {
     "",
     "## Step 1 — Projects",
     "For every project you work on (look at your repos, your memory, your current context):",
-    "1. Find it in the list above. Match by git remote first (`git remote get-url origin`), then folder name, then name.",
-    "2. If it is missing, call `create_project` with `name`, `repo_url` (the git remote) and `repo_path` (your local checkout).",
-    "   The desk returns the existing project instead of creating a twin when the remote, folder or name match — that is expected.",
-    "3. Work out how current your knowledge of the project is: the date of your last session/conversation on it, or of the",
+    "1. Identify each project the way the human does: by the NAME OF THE CHAT/SESSION they gave you for it and what it is",
+    "   about — not by the folder you happen to run in (sessions are often started in a generic folder). Then use the git",
+    "   remote (`git remote get-url origin`) if there is one.",
+    "2. Find it in the list above (names and aliases), or ask the desk with `find_similar_projects`. If it exists, use it and",
+    "   record your session name with `add_project_alias`.",
+    "3. Only if it is really missing, call `create_project` with `name`, `session_name`, `folder`, and `repo_url`/`repo_path`",
+    "   when known. The desk returns the existing project, or answers possible_duplicate_project with candidates — then",
+    "   use the candidate (and add your alias) unless you are sure it is a different project (`force: true`).",
+    "   If you are unsure whether two things are one project, ask the human instead of guessing.",
+    "   Found a task in the wrong project? `move_task`. Found two projects that are one? Tell the human, or `merge_projects`",
+    "   only when certain.",
+    "4. Work out how current your knowledge of the project is: the date of your last session/conversation on it, or of the",
     "   latest commit you know (`git log -1 --format=%cs`). That date is your **as_of**. Different agents know different things —",
     "   the desk lets the most recent knowledge win.",
-    "4. Brief: if the project has none, write one with `update_project` (goal, stack, how to run/test, conventions) and pass",
+    "5. Brief: if the project has none, write one with `update_project` (goal, stack, how to run/test, conventions) and pass",
     "   `as_of` + `evidence`. If it has one, read it (`project_board` shows its as-of date). Replace it only if your as_of is newer;",
     "   otherwise — or if the desk refuses with stale_knowledge — add what is missing with `add_brief_note`.",
     "",

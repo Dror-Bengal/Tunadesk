@@ -61,6 +61,11 @@ export function ProjectPage({ projectKey, view }: { projectKey: string; view: st
             </Pill>
           </h1>
           {project.description && <p>{project.description}</p>}
+          {project.aliases.length > 0 && (
+            <p style={{ fontSize: 13, color: "var(--text-3)" }} dir="auto">
+              {t("project.aka")} {project.aliases.join(" · ")}
+            </p>
+          )}
         </div>
         <span className="spacer" />
         <AgentViewLink href={`/api/projects/${project.key}/board.md`} />
@@ -823,7 +828,10 @@ function ProjectSettings({ project, onClose }: { project: Project; onClose: () =
     color: project.color,
     owner: project.owner,
     locked_to: project.locked_to,
+    aliases: project.aliases.join("\n"),
   });
+  const { projects } = useDesk();
+  const [mergeInto, setMergeInto] = useState("");
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
   return (
     <Modal
@@ -852,7 +860,8 @@ function ProjectSettings({ project, onClose }: { project: Project; onClose: () =
           <button
             className="btn primary"
             onClick={async () => {
-              const ok = await run(() => patch(`/api/projects/${project.key}`, form), t("settings.saved"));
+              const aliases = form.aliases.split("\n").map((x) => x.trim()).filter(Boolean);
+              const ok = await run(() => patch(`/api/projects/${project.key}`, { ...form, aliases }), t("settings.saved"));
               if (ok) {
                 invalidate();
                 onClose();
@@ -909,11 +918,6 @@ function ProjectSettings({ project, onClose }: { project: Project; onClose: () =
           <PersonCell value={form.owner} onChange={(v) => set("owner", v)} showName />
         </div>
         <div className="field">
-          <span>{t("project.briefMaintainer")}</span>
-          <PersonCell value={form.locked_to} onChange={(v) => set("locked_to", v)} showName />
-          <small>{t("project.briefMaintainerHint")}</small>
-        </div>
-        <div className="field">
           <span>{t("project.color")}</span>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {PALETTE.map((c) => (
@@ -927,6 +931,47 @@ function ProjectSettings({ project, onClose }: { project: Project; onClose: () =
             ))}
           </div>
         </div>
+      </div>
+      <div className="field">
+        <span>{t("project.briefMaintainer")}</span>
+        <PersonCell value={form.locked_to} onChange={(v) => set("locked_to", v)} showName />
+        <small>{t("project.briefMaintainerHint")}</small>
+      </div>
+      <label className="field">
+        <span>{t("project.aliases")}</span>
+        <textarea className="textarea" dir="auto" rows={3} value={form.aliases} onChange={(e) => set("aliases", e.target.value)} placeholder={t("project.aliasesPlaceholder")} />
+        <small>{t("project.aliasesHint")}</small>
+      </label>
+      <div className="field">
+        <span>{t("project.merge")}</span>
+        <div style={{ display: "flex", gap: 8 }}>
+          <select className="select" value={mergeInto} onChange={(e) => setMergeInto(e.target.value)}>
+            <option value="">—</option>
+            {projects
+              .filter((p) => p.id !== project.id)
+              .map((p) => (
+                <option key={p.id} value={p.key}>
+                  {p.key} · {p.name}
+                </option>
+              ))}
+          </select>
+          <button
+            className="btn"
+            disabled={!mergeInto}
+            onClick={async () => {
+              if (!confirm(t("project.mergeConfirm", { from: project.key, into: mergeInto }))) return;
+              const res = await run(() => post<{ project: Project }>(`/api/projects/${project.key}/merge`, { into: mergeInto }), t("project.merged"));
+              if (res) {
+                invalidate();
+                onClose();
+                navigate(`/p/${res.project.key}`);
+              }
+            }}
+          >
+            {t("project.mergeButton")}
+          </button>
+        </div>
+        <small>{t("project.mergeHint")}</small>
       </div>
     </Modal>
   );

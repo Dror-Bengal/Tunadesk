@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { post, invalidate } from "../api";
+import { ApiError, post, invalidate } from "../api";
 import { useI18n } from "../i18n";
 import { navigate } from "../router";
 import { PALETTE } from "../format";
@@ -19,12 +19,22 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
   const [color, setColor] = useState(PALETTE[Math.floor(Math.random() * PALETTE.length)]);
   const [busy, setBusy] = useState(false);
 
-  const submit = async () => {
+  const [similar, setSimilar] = useState<Array<{ key: string; name: string; matched: string }>>([]);
+  const submit = async (force = false) => {
     if (!name.trim()) return;
     setBusy(true);
-    const p = await run(
-      () => post<Project & { existing?: boolean }>("/api/projects", { name: name.trim(), key: key.trim() || undefined, description, repo_path: repoPath.trim(), repo_url: repoUrl.trim(), priority, color }),
-    );
+    let p: (Project & { existing?: boolean }) | undefined;
+    try {
+      p = await post<Project & { existing?: boolean }>("/api/projects", { name: name.trim(), key: key.trim() || undefined, description, repo_path: repoPath.trim(), repo_url: repoUrl.trim(), priority, color, force });
+    } catch (e) {
+      setBusy(false);
+      if (e instanceof ApiError && e.code === "possible_duplicate_project") {
+        setSimilar((e.details?.similar as typeof similar) ?? []);
+        return;
+      }
+      await run(() => Promise.reject(e));
+      return;
+    }
     if (p) toast(p.existing ? t("project.existing", { key: p.key }) : t("project.created"));
     setBusy(false);
     if (p) {
@@ -43,8 +53,8 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
           <button className="btn" onClick={onClose}>
             {t("common.cancel")}
           </button>
-          <button className="btn primary" onClick={submit} disabled={!name.trim() || busy}>
-            {t("common.create")}
+          <button className="btn primary" onClick={() => submit(similar.length > 0)} disabled={!name.trim() || busy}>
+            {similar.length ? t("task.createAnyway") : t("common.create")}
           </button>
         </>
       }
@@ -52,13 +62,43 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          void submit();
+          void submit(similar.length > 0);
         }}
       >
+        {similar.length > 0 && (
+          <div className="callout warn" style={{ display: "block" }}>
+            <strong>{t("project.similarTitle")}</strong>
+            <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+              {similar.map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  className="btn small ghost"
+                  style={{ justifyContent: "flex-start" }}
+                  onClick={() => {
+                    onClose();
+                    navigate(`/p/${m.key}`);
+                  }}
+                >
+                  {m.key} · {m.name}
+                  {m.matched !== m.name ? ` (${m.matched})` : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="field-row">
           <label className="field">
             <span>{t("common.name")}</span>
-            <input className="input" autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+            <input
+              className="input"
+              autoFocus
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setSimilar([]);
+              }}
+            />
           </label>
           <label className="field">
             <span>

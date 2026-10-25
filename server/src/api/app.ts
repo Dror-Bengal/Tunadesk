@@ -102,9 +102,14 @@ const projectCreate = z.object({
   groups: z.array(z.string().min(1).max(60)).max(20).optional(),
   /** Create even if a project with the same remote/folder/name exists. */
   force: z.boolean().optional(),
+  /** Other names: chat session names, Hebrew/English names, nicknames. */
+  aliases: z.array(z.string().min(1).max(120)).max(30).optional(),
+  /** Where the calling agent knows this project from. The session name also becomes an alias. */
+  session_name: z.string().max(200).optional(),
+  folder: z.string().max(500).optional(),
 });
 const projectPatch = projectCreate
-  .omit({ groups: true, force: true })
+  .omit({ groups: true, force: true, session_name: true, folder: true })
   .partial()
   .extend({
     status: z.enum(PROJECT_STATUSES).optional(),
@@ -114,6 +119,7 @@ const projectPatch = projectCreate
     as_of: z.string().max(40).optional(),
     evidence: z.string().max(300).optional(),
     merged_notes: z.array(z.string()).max(100).optional(),
+    add_aliases: z.array(z.string().min(1).max(120)).max(30).optional(),
   });
 
 const taskCreate = z.object({
@@ -394,19 +400,53 @@ export function createApp(svc: Service, config: AppConfig) {
   // projects
   api.get("/projects", (c) => c.json(svc.listProjects({ include_archived: c.req.query("archived") === "1" })));
   api.post("/projects", async (c) => {
-    const { force, ...b } = await body(c, projectCreate);
-    // Several agents describe the same repo: hand back the existing project instead of a twin.
-    const existing = force ? null : svc.findDuplicateProject(b);
-    if (existing) return c.json({ ...existing, existing: true }, 200);
-    return c.json(svc.createProject(b, c.get("actor").id), 201);
+    const { force, session_name, folder, ...b } = await body(c, projectCreate);
+    const me = c.get("actor").id;
+    const names = [b.name, ...(b.aliases ?? []), ...(session_name ? [session_name] : [])];
+    const remember = (projectId: string) => {
+      // How this agent knows the project: next time the session name alone finds it.
+      svc.addAliases(projectId, [...(b.aliases ?? []), ...(session_name ? [session_name] : [])], me);
+      if (session_name) svc.addSource(projectId, me, "session", session_name);
+      if (folder) svc.addSource(projectId, me, "folder", folder);
+      if (b.repo_url) svc.addSource(projectId, me, "repo", b.repo_url);
+      return svc.project(projectId);
+    };
+    // Several agents describe the same project: hand back the existing one instead of a twin.
+    const existing = force ? null : svc.findDuplicateProject({ ...b, aliases: names });
+    if (existing) return c.json({ ...remember(existing.id), existing: true }, 200);
+    if (!force) {
+      const similar = svc.similarProjects(names, { repo_url: b.repo_url });
+      if (similar.length) {
+        const list = similar.map((m) => `${m.project.key} "${m.project.name}"${m.matched !== m.project.name ? ` (also known as "${m.matched}")` : ""} — ${Math.round(m.score * 100)}% similar`);
+        throw new SwarmError(
+          409,
+          "possible_duplicate_project",
+          `Possible duplicate of ${list.join("; ")}. If it is the same project, use it and add your session name as an alias (add_project_alias). If it is really a different project, create it again with force: true.`,
+          { similar: similar.map((m) => ({ key: m.project.key, name: m.project.name, matched: m.matched, score: m.score })) },
+        );
+      }
+    }
+    const created = svc.createProject({ ...b, aliases: b.aliases }, me);
+    return c.json(remember(created.id), 201);
+  });
+  api.get("/projects/similar", (c) => {
+    const name = c.req.query("name");
+    if (!name) throw badRequest("name is required");
+    return c.json(svc.similarProjects([name], { threshold: Number(c.req.query("threshold") ?? 0.4) }).map((m) => ({ ...m.project, score: m.score, matched: m.matched })));
+  });
+  api.post("/projects/:ref/merge", async (c) => {
+    const b = await body(c, z.object({ into: z.string() }));
+    return c.json(svc.mergeProject(c.req.param("ref"), b.into, c.get("actor").id));
   });
   api.get("/projects/:ref", (c) => {
     const p = svc.project(c.req.param("ref"));
-    return c.json({ project: p, groups: svc.groups(p.id), notes: svc.briefNotes(p.id) });
+    return c.json({ project: p, groups: svc.groups(p.id), notes: svc.briefNotes(p.id), sources: svc.sources(p.id) });
   });
   api.get("/projects/:ref/board.md", (c) => md(c, renderBoard(svc, c.req.param("ref"), { include_closed: c.req.query("closed") === "1" })));
   api.patch("/projects/:ref", async (c) => {
-    const { as_of, evidence, merged_notes, ...b } = await body(c, projectPatch);
+    const { as_of, evidence, merged_notes, add_aliases, ...b } = await body(c, projectPatch);
+    if (b.aliases !== undefined && c.get("actor").kind !== "human") throw forbidden("Agents add aliases with add_aliases; only humans replace the list");
+    if (add_aliases?.length) svc.addAliases(c.req.param("ref"), add_aliases, c.get("actor").id);
     if (b.locked_to !== undefined && c.get("actor").kind !== "human") throw forbidden("Only humans lock a project's brief");
     // Woken agents run inside repo_path, so only a human may point an existing project somewhere else.
     if (b.repo_path !== undefined && c.get("actor").kind !== "human" && b.repo_path !== svc.project(c.req.param("ref")).repo_path)
@@ -462,13 +502,14 @@ export function createApp(svc: Service, config: AppConfig) {
   api.post("/tasks", async (c) => {
     const { force, ...b } = await body(c, taskCreate);
     if (!force && !b.parent) {
-      const similar = svc.similarTasks(b.project, b.title);
+      const similar = svc.similarTasksAnywhere(b.project, b.title);
       if (similar.length) {
         const list = similar.map((m) => `${m.task.key} "${m.task.title}" (${m.task.status}${m.task.assignee ? `, @${m.task.assignee}` : ""}, ${Math.round(m.score * 100)}% similar)`);
+        const elsewhere = similar.some((m) => m.task.project_key !== svc.project(b.project).key);
         throw new SwarmError(
           409,
           "possible_duplicate",
-          `Possible duplicate of ${list.join("; ")}. If it is the same work, join it instead: comment on that task and @mention its owner. If it is different, create it again with force: true.`,
+          `Possible duplicate of ${list.join("; ")}. If it is the same work, join it instead: comment on that task and @mention its owner${elsewhere ? " — or, if it belongs in this project, move it here with move_task" : ""}. If it is different, create it again with force: true.`,
           { similar: similar.map((m) => ({ key: m.task.key, title: m.task.title, status: m.task.status, assignee: m.task.assignee, score: m.score })) },
         );
       }
@@ -500,6 +541,10 @@ export function createApp(svc: Service, config: AppConfig) {
   api.delete("/tasks/:ref", (c) => {
     svc.deleteTask(c.req.param("ref"), c.get("actor").id);
     return c.json({ ok: true });
+  });
+  api.post("/tasks/:ref/move", async (c) => {
+    const b = await body(c, z.object({ project: z.string(), group: z.string().optional() }));
+    return c.json(svc.moveTask(c.req.param("ref"), b.project, c.get("actor").id, { group: b.group }));
   });
   api.post("/tasks/:ref/claim", async (c) => {
     const b = c.req.header("content-type")?.includes("json") ? await body(c, z.object({ minutes: z.number().int().min(1).max(24 * 60).optional() })) : {};

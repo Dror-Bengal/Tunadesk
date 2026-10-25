@@ -374,6 +374,10 @@ export function createMcpServer(call: DeskCall, version: string): McpServer {
         repo_url: z.string().optional(),
         brief: z.string().optional(),
         priority: z.enum(PRIORITIES).optional(),
+        session_name: z.string().optional().describe("The name the human gave the chat/session you know this project from — the most reliable identity; it is stored as an alias"),
+        folder: z.string().optional().describe("Folder you work on it in (may be generic, e.g. your home folder)"),
+        aliases: z.array(z.string()).optional().describe("Other names: Hebrew/English names, nicknames"),
+        force: z.boolean().optional().describe("Create even though similar projects exist — only after checking they are different"),
       },
     },
     async (a) =>
@@ -406,6 +410,50 @@ export function createMcpServer(call: DeskCall, version: string): McpServer {
       },
     },
     async ({ project, ...patch }) => run("PATCH", `/api/projects/${enc(project)}`, patch, (p) => `Updated ${p.key}${p.brief_as_of ? ` (brief as of ${p.brief_as_of.slice(0, 10)})` : ""}.`),
+  );
+
+  server.registerTool(
+    "add_project_alias",
+    {
+      title: "Add a project alias",
+      description: "Record another name a project goes by (e.g. the name of the chat session you work on it in) so every agent maps it to the same project.",
+      inputSchema: { project: z.string(), alias: z.string() },
+    },
+    async ({ project, alias }) => run("PATCH", `/api/projects/${enc(project)}`, { add_aliases: [alias] }, (p) => `${p.key} is also known as: ${p.aliases.join(", ")}`),
+  );
+
+  server.registerTool(
+    "find_similar_projects",
+    {
+      title: "Find similar projects",
+      description: "Check whether a project already exists under another name or alias (fuzzy, Hebrew + English) before creating one.",
+      inputSchema: { name: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ name }) =>
+      run("GET", `/api/projects/similar${q({ name })}`, undefined, (list: any[]) =>
+        list.length ? list.map((p) => `${p.key} · ${p.name}${p.matched !== p.name ? ` (alias "${p.matched}")` : ""} — ${Math.round(p.score * 100)}% similar`).join("\n") : "No similar projects."),
+  );
+
+  server.registerTool(
+    "move_task",
+    {
+      title: "Move a task to another project",
+      description: "Move a task (with its sub-tasks) to the project it belongs to. It gets a new key; the old key keeps working.",
+      inputSchema: { task: z.string(), project: z.string(), group: z.string().optional() },
+    },
+    async ({ task, project, group }) => run("POST", `/api/tasks/${enc(task)}/move`, { project, group }, (t) => `Moved ${task} → ${t.key} in ${t.project_key}.`),
+  );
+
+  server.registerTool(
+    "merge_projects",
+    {
+      title: "Merge two projects",
+      description: "Fold a duplicate project into the right one: tasks (re-keyed, old keys keep working), decisions, brief, notes and names move over. The human is notified. Use only when you are sure they are the same project.",
+      inputSchema: { from: z.string().describe("The duplicate project to fold in (it disappears)"), into: z.string().describe("The project to keep") },
+    },
+    async ({ from, into }) =>
+      run("POST", `/api/projects/${enc(from)}/merge`, { into }, (r) => `Merged ${from} into ${r.project.key}. Moved: ${r.moved_tasks.map((m: any) => `${m.from}→${m.to}`).join(", ") || "no tasks"}.`),
   );
 
   server.registerTool(

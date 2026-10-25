@@ -8,7 +8,9 @@ without duplicates, join existing tasks, log key decisions, finish with `onboard
 
 **Every session:**
 1. Call `tunadesk.briefing` first — inbox (handoffs/mentions), ranked next tasks, portfolio, decisions.
-2. Map this repo to a project (match `Repo:` in `tunadesk.project_board`); create one if it is new work.
+2. Map this session to a project by the name the user gave the session and its subject first (the folder
+   may be generic), then the git remote; check names/aliases with `find_similar_projects`, record your
+   session name with `add_project_alias`; create a project only if it is really new.
 3. `claim_task` before changing code for a task; if another agent holds it, don't touch it.
 4. Post progress with `comment`; record non-obvious choices with `log_decision` (context, decision,
    rationale, alternatives; `status: "proposed"` if the human should confirm).

@@ -20,9 +20,12 @@ finish with `onboarding_report`.
 
 1. Call `briefing`. It returns your inbox, a ranked "do next" list (already weighed against your token
    budget), your open tasks, the portfolio and recent decisions.
-2. Work out which project this repository belongs to: match the repo path / name against the portfolio
-   (`project_board` shows `Repo:`). If none matches and the user is starting real work here, offer to
-   `create_project` with `repo_path` set to the current directory.
+2. Work out which project this session is about. The most reliable identity is **the name the user gave
+   this chat/session** and its subject — sessions are often started in a generic folder, so the folder is
+   only a hint. Match against project names and aliases in the portfolio (or `find_similar_projects`),
+   then the git remote. Record your session name on the project with `add_project_alias`. If nothing
+   matches and the user is starting real work, `create_project` with `session_name` and `folder`. Unsure?
+   Ask the user rather than guessing.
 3. Handle the inbox first: handoffs and review requests addressed to you are someone waiting on you.
 
 ## 2. Before touching code

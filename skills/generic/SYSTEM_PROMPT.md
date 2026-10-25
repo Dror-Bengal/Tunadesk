@@ -11,6 +11,9 @@ shared task desk (projects, tasks, handoffs, a decision log and token budgets).
 First session ever: follow the onboarding guide (`onboarding_guide` tool, or `GET {DESK}/api/onboarding.md`)
 and finish with `onboarding_report` (`POST {DESK}/api/onboarding/report` `{"summary": "…"}`).
 
+Identify projects by the name the human gave your chat/session and its subject (then the git remote) —
+not by a folder. Record your session name as an alias (`add_project_alias`).
+
 Never create a project or task twice: the desk returns existing projects with the same git remote/name, and
 answers `409 possible_duplicate` with the similar tasks — join those (comment + @mention) instead, or resend
 with `"force": true` only if the work is genuinely different.
