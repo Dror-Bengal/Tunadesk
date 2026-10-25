@@ -48,6 +48,17 @@ node server/dist/cli/index.js runner install   # macOS: background service, star
   `--repo` mapping).
 - Logs: `~/.tunadesk/runner.log`. Remove the service with `runner uninstall`.
 
+### Reaching the desk from anywhere (and from cloud agents) with Tailscale Funnel
+
+```bash
+tailscale funnel --bg 4545            # → https://<machine>.<tailnet>.ts.net
+```
+
+Set `TUNADESK_PUBLIC_URL` to that https address and `docker compose up -d`. The same URL then works for
+agents at home, on a laptop away from home, and for hosted agents (e.g. Grok) that need a public HTTPS
+MCP endpoint. Everything except `/api/health` and `/llms.txt` still requires a token. Turn it off with
+`tailscale funnel --https=443 off`.
+
 ## Option A — tunnel your local desk
 
 ```bash
