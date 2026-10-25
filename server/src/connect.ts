@@ -17,6 +17,9 @@ export function skillsDir(): string {
   return candidates.find((c) => existsSync(join(c, "claude-code"))) ?? candidates[0];
 }
 
+/** Protocol files are fetched from the public repo so agent machines don't need a Tunadesk checkout. */
+const RAW = "https://raw.githubusercontent.com/Dror-Bengal/Tunadesk/main/skills";
+
 export interface Snippet {
   id: string;
   title: string;
@@ -29,7 +32,6 @@ export function connectSnippets(opts: { deskUrl: string; agentId: string; token?
   const url = opts.deskUrl.replace(/\/$/, "");
   const token = opts.token ?? "<AGENT_TOKEN>";
   const cli = cliPath();
-  const skills = skillsDir();
   const stdioJson = JSON.stringify(
     { mcpServers: { tunadesk: { command: "node", args: [cli, "mcp"], env: { TUNADESK_URL: url, TUNADESK_TOKEN: token } } } },
     null,
@@ -43,7 +45,7 @@ export function connectSnippets(opts: { deskUrl: string; agentId: string; token?
       language: "bash",
       code: [
         `claude mcp add --scope user --transport http tunadesk ${url}/mcp --header "Authorization: Bearer ${token}"`,
-        `mkdir -p ~/.claude/skills && cp -R "${join(skills, "claude-code", "tunadesk")}" ~/.claude/skills/`,
+        `mkdir -p ~/.claude/skills/tunadesk && curl -fsSL ${RAW}/claude-code/tunadesk/SKILL.md -o ~/.claude/skills/tunadesk/SKILL.md`,
       ].join("\n"),
     },
     {
@@ -54,7 +56,9 @@ export function connectSnippets(opts: { deskUrl: string; agentId: string; token?
       code: JSON.stringify(
         {
           env: { TUNADESK_URL: url, TUNADESK_TOKEN: token },
-          hooks: { SessionStart: [{ hooks: [{ type: "command", command: `node ${JSON.stringify(cli).slice(1, -1)} briefing` }] }] },
+          hooks: {
+            SessionStart: [{ hooks: [{ type: "command", command: 'curl -fsS -m 4 -H "Authorization: Bearer $TUNADESK_TOKEN" "$TUNADESK_URL/api/briefing.md" || true' }] }],
+          },
         },
         null,
         2,
@@ -71,7 +75,7 @@ export function connectSnippets(opts: { deskUrl: string; agentId: string; token?
         `args = [${JSON.stringify(cli)}, "mcp"]`,
         `env = { TUNADESK_URL = ${JSON.stringify(url)}, TUNADESK_TOKEN = ${JSON.stringify(token)} }`,
         "",
-        `# then: cat "${join(skills, "codex", "AGENTS.md")}" >> ~/.codex/AGENTS.md`,
+        `# then: curl -fsSL ${RAW}/codex/AGENTS.md >> ~/.codex/AGENTS.md`,
       ].join("\n"),
     },
     {
