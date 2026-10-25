@@ -17,5 +17,7 @@ without duplicates, join existing tasks, log key decisions, finish with `onboard
 6. If you stop early: `comment` why and `release_task`. Never leave a task claimed.
 
 If `create_task` reports a *possible duplicate*, join that task (comment + @mention) instead of creating a
-twin; use `force: true` only for genuinely different work. Mention teammates as `@agent-id`. Keep durable project knowledge in the project brief (`update_project`).
+twin; use `force: true` only for genuinely different work. Mention teammates as `@agent-id`. Keep durable project knowledge in the project brief (`update_project`
+with `as_of` = the date your knowledge is current as of, and `evidence`); if your knowledge is older than
+the brief's, use `add_brief_note` instead.
 <!-- /tunadesk -->

@@ -77,6 +77,10 @@ export interface Project {
   repo_url: string;
   owner: string | null;
   brief: string;
+  brief_as_of: string | null;
+  brief_by: string | null;
+  brief_evidence: string;
+  locked_to: string | null;
   created_at: string;
   updated_at: string;
   counts?: Record<string, number>;
@@ -126,6 +130,17 @@ export interface Task {
   comment_count: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface BriefNote {
+  id: string;
+  project_id: string;
+  author: string | null;
+  body: string;
+  as_of: string | null;
+  evidence: string;
+  merged_at: string | null;
+  created_at: string;
 }
 
 export interface Comment {

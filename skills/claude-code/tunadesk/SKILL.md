@@ -44,7 +44,11 @@ finish with `onboarding_report`.
   Use `status: "proposed"` when the human should confirm before it sticks. Check `list_decisions`
   before re-deciding something already decided.
 - Durable knowledge about the project (stack, conventions, how to run tests, gotchas) belongs in the
-  project brief: `update_project` with the full new `brief`.
+  project brief: `update_project` with the full new `brief`, plus `as_of` (the date your knowledge is
+  current as of — your last session or the latest commit you know) and `evidence`. The desk keeps the
+  most recent knowledge: if yours is older, or another agent maintains the brief, use `add_brief_note`.
+- If the board shows notes waiting on a brief you maintain, fold them in and pass their ids as
+  `merged_notes`.
 - Discovered follow-up work? `create_task` it rather than silently expanding scope.
 - Long job? Re-`claim_task` to extend the lease before it expires (default 60 minutes).
 

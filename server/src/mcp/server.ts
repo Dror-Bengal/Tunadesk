@@ -309,6 +309,7 @@ export function createMcpServer(call: DeskCall, version: string): McpServer {
         estimate_tokens: z.number().int().min(0).optional(),
         tags: z.array(z.string()).optional(),
         blocked_by: z.string().optional().describe("Add a blocker task key"),
+        as_of: z.string().optional().describe("When setting a status from memory rather than live work: the date that knowledge is current as of. The desk refuses it if the status changed later."),
       },
     },
     async ({ task, blocked_by, ...patch }) => {
@@ -391,6 +392,12 @@ export function createMcpServer(call: DeskCall, version: string): McpServer {
       inputSchema: {
         project: z.string(),
         brief: z.string().optional().describe("Full replacement markdown"),
+        as_of: z
+          .string()
+          .optional()
+          .describe("REQUIRED when replacing a brief: the date your knowledge of this project is current as of (your last session/conversation/commit on it), e.g. 2026-10-20. The desk refuses briefs older than the current one."),
+        evidence: z.string().optional().describe("What the as_of is based on, e.g. 'session 2026-10-20' or 'commit a1b2c3 (2026-10-19)'"),
+        merged_notes: z.array(z.string()).optional().describe("Ids of brief notes you folded into this brief"),
         description: z.string().optional(),
         status: z.enum(["active", "paused", "done", "archived"]).optional(),
         priority: z.enum(PRIORITIES).optional(),
@@ -398,7 +405,23 @@ export function createMcpServer(call: DeskCall, version: string): McpServer {
         repo_url: z.string().optional(),
       },
     },
-    async ({ project, ...patch }) => run("PATCH", `/api/projects/${enc(project)}`, patch, (p) => `Updated ${p.key}.`),
+    async ({ project, ...patch }) => run("PATCH", `/api/projects/${enc(project)}`, patch, (p) => `Updated ${p.key}${p.brief_as_of ? ` (brief as of ${p.brief_as_of.slice(0, 10)})` : ""}.`),
+  );
+
+  server.registerTool(
+    "add_brief_note",
+    {
+      title: "Add a note to a project brief",
+      description:
+        "Share what you know about a project when you may not replace its brief (your knowledge is older, or another agent maintains it). The maintainer or the human merges notes into the brief.",
+      inputSchema: {
+        project: z.string(),
+        note: z.string().describe("What you know that the brief is missing or gets wrong"),
+        as_of: z.string().optional().describe("Date your knowledge is current as of"),
+        evidence: z.string().optional(),
+      },
+    },
+    async ({ project, note, as_of, evidence }) => run("POST", `/api/projects/${enc(project)}/notes`, { body: note, as_of, evidence }, () => `Note added to the ${project} brief.`),
   );
 
   return server;

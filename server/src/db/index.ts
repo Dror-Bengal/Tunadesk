@@ -194,6 +194,26 @@ const MIGRATIONS: string[] = [
   UPDATE groups SET color = CASE lower(color) WHEN '#579bfc' THEN '#44546a' WHEN '#00c875' THEN '#2f6b4f' WHEN '#a25ddc' THEN '#6b4a8a' WHEN '#fdab3d' THEN '#a8661c' WHEN '#e2445c' THEN '#9e2f3a' WHEN '#0086c0' THEN '#2d6a6a' WHEN '#ff642e' THEN '#8c4a2f' WHEN '#037f4c' THEN '#5c6b2f' WHEN '#bb3354' THEN '#7a3b5c' WHEN '#784bd1' THEN '#4e4a8c' WHEN '#ff7575' THEN '#8c4a2f' WHEN '#66ccff' THEN '#2d6a6a' WHEN '#c4c4c4' THEN '#6e675c' WHEN '#ff7a45' THEN '#8c4a2f' WHEN '#2f5bea' THEN '#44546a' WHEN '#676879' THEN '#57534c' WHEN '#333333' THEN '#7a1f2b' WHEN '#401694' THEN '#8a5a1c' WHEN '#5559df' THEN '#3d5a52' ELSE color END;
   UPDATE actors SET color = CASE lower(color) WHEN '#579bfc' THEN '#44546a' WHEN '#00c875' THEN '#2f6b4f' WHEN '#a25ddc' THEN '#6b4a8a' WHEN '#fdab3d' THEN '#a8661c' WHEN '#e2445c' THEN '#9e2f3a' WHEN '#0086c0' THEN '#2d6a6a' WHEN '#ff642e' THEN '#8c4a2f' WHEN '#037f4c' THEN '#5c6b2f' WHEN '#bb3354' THEN '#7a3b5c' WHEN '#784bd1' THEN '#4e4a8c' WHEN '#ff7575' THEN '#8c4a2f' WHEN '#66ccff' THEN '#2d6a6a' WHEN '#c4c4c4' THEN '#6e675c' WHEN '#ff7a45' THEN '#8c4a2f' WHEN '#2f5bea' THEN '#44546a' WHEN '#676879' THEN '#57534c' WHEN '#333333' THEN '#7a1f2b' WHEN '#401694' THEN '#8a5a1c' WHEN '#5559df' THEN '#3d5a52' ELSE color END;
   `,
+  // v3 — freshness of knowledge: who wrote a brief and "as of" when, notes from less-informed agents, status dates
+  `
+  ALTER TABLE projects ADD COLUMN brief_as_of TEXT;
+  ALTER TABLE projects ADD COLUMN brief_by TEXT;
+  ALTER TABLE projects ADD COLUMN brief_evidence TEXT NOT NULL DEFAULT '';
+  ALTER TABLE projects ADD COLUMN locked_to TEXT;
+  ALTER TABLE tasks ADD COLUMN status_changed_at TEXT;
+  UPDATE tasks SET status_changed_at = COALESCE(completed_at, started_at, updated_at, created_at);
+  CREATE TABLE brief_notes (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    author TEXT REFERENCES actors(id) ON DELETE SET NULL,
+    body TEXT NOT NULL,
+    as_of TEXT,
+    evidence TEXT NOT NULL DEFAULT '',
+    merged_at TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX brief_notes_project ON brief_notes(project_id, created_at);
+  `,
 ];
 
 export function openDb(file: string): DB {

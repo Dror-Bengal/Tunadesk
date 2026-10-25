@@ -4,7 +4,7 @@ import { useI18n, type MessageKey } from "../i18n";
 import { useDesk } from "../data";
 import { href, navigate, openTask, setQuery, useRoute } from "../router";
 import { PALETTE, PRIORITY_COLOR, PROJECT_STATUS_COLOR, STATUS_COLOR, dueState, fmtDate, fmtTokens, readableText, relTime } from "../format";
-import { PRIORITIES, PROJECT_STATUSES, TASK_STATUSES, type Activity, type Group, type Priority, type Project, type Task, type TaskStatus } from "../types";
+import { PRIORITIES, PROJECT_STATUSES, TASK_STATUSES, type Activity, type BriefNote, type Group, type Priority, type Project, type Task, type TaskStatus } from "../types";
 import { AgentViewLink, Avatar, Empty, Icon, KeyChip, Markdown, Modal, Pill, PopoverButton, useAction } from "../components/ui";
 import { DateCell, PersonCell, PriorityCell, StatusCell, TokensCell, TypeCell, typeIcon } from "../components/cells";
 import { Battery } from "./Home";
@@ -24,7 +24,7 @@ export function useTaskUpdate() {
 export function ProjectPage({ projectKey, view }: { projectKey: string; view: string }) {
   const { t } = useI18n();
   const route = useRoute();
-  const detail = useApi<{ project: Project; groups: Group[] }>(`/api/projects/${encodeURIComponent(projectKey)}`);
+  const detail = useApi<{ project: Project; groups: Group[]; notes: BriefNote[] }>(`/api/projects/${encodeURIComponent(projectKey)}`);
   const showDone = route.query.get("done") !== "0";
   const tasks = useApi<Task[]>(`/api/tasks?project=${encodeURIComponent(projectKey)}${showDone ? "&closed=1" : ""}&limit=2000`);
   const [person, setPerson] = useState<string | null>(null);
@@ -116,7 +116,7 @@ export function ProjectPage({ projectKey, view }: { projectKey: string; view: st
 
       {tab === "table" && <TableView project={project} groups={groups} tasks={filtered} />}
       {tab === "kanban" && <KanbanView tasks={filtered.filter((x) => !x.parent_id || !filtered.some((p) => p.id === x.parent_id))} />}
-      {tab === "brief" && <BriefView project={project} />}
+      {tab === "brief" && <BriefView project={project} notes={detail.data.notes ?? []} />}
       {tab === "decisions" && <DecisionList project={project.key} />}
       {tab === "activity" && <ActivityView project={project.key} />}
 
@@ -675,16 +675,17 @@ function KanbanView({ tasks }: { tasks: Task[] }) {
 }
 
 // ------------------------------------------------------------------ brief
-function BriefView({ project }: { project: Project }) {
+function BriefView({ project, notes }: { project: Project; notes: BriefNote[] }) {
   const { t, locale } = useI18n();
   const run = useAction();
+  const { actor } = useDesk();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(project.brief);
   return (
     <div className="card" style={{ maxWidth: 900 }}>
       <div className="card-head">
         <h2>{t("project.brief")}</h2>
-        <span style={{ color: "var(--text-3)", fontSize: 12 }}>{relTime(project.updated_at, locale)}</span>
+
         <span className="spacer" />
         {editing ? (
           <>
@@ -715,16 +716,63 @@ function BriefView({ project }: { project: Project }) {
         )}
       </div>
       <div className="card-body">
-        <div className="callout">
-          <Icon name="bot" size={16} />
-          <span>{t("project.briefHint")}</span>
-        </div>
+        {project.brief_as_of ? (
+          <div className="brief-meta">
+            <Avatar actor={actor(project.brief_by)} size={18} />
+            <span>
+              {t("project.briefAsOf", { date: fmtDate(project.brief_as_of, locale), who: actor(project.brief_by)?.name ?? project.brief_by ?? "—" })}
+              {project.brief_evidence ? ` · ${project.brief_evidence}` : ""}
+            </span>
+            {project.locked_to && (
+              <Pill color="#8a5a1c" outline>
+                <Icon name="lock" size={11} /> {t("project.lockedTo", { who: actor(project.locked_to)?.name ?? project.locked_to })}
+              </Pill>
+            )}
+          </div>
+        ) : (
+          <div className="callout">
+            <Icon name="bot" size={16} />
+            <span>{t("project.briefHint")}</span>
+          </div>
+        )}
         {editing ? (
           <textarea className="textarea" dir="auto" style={{ minHeight: 360, fontFamily: "var(--mono)", fontSize: 13 }} value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus />
         ) : project.brief ? (
           <Markdown text={project.brief} />
         ) : (
           <Empty>{t("project.briefEmpty")}</Empty>
+        )}
+        {notes.length > 0 && (
+          <div style={{ marginTop: 20 }}>
+            <h3 style={{ fontSize: 13, fontWeight: 500, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              {t("project.briefNotes", { n: notes.length })}
+            </h3>
+            <p style={{ color: "var(--text-3)", fontSize: 13, marginTop: 0 }}>{t("project.briefNotesHint")}</p>
+            {notes.map((n) => (
+              <div key={n.id} className="update" style={{ borderInlineStart: "3px solid var(--accent)" }}>
+                <div className="update-head">
+                  <Avatar actor={actor(n.author)} size={22} />
+                  <strong>{actor(n.author)?.name ?? n.author}</strong>
+                  {n.as_of && <span style={{ color: "var(--text-3)", fontSize: 12 }}>{t("project.asOf", { date: fmtDate(n.as_of, locale) })}</span>}
+                  {n.evidence && <span style={{ color: "var(--text-3)", fontSize: 12 }}>· {n.evidence}</span>}
+                  <span className="when">
+                    <button
+                      className="btn small"
+                      onClick={async () => {
+                        await run(() => post(`/api/projects/${project.key}/notes/merged`, { ids: [n.id] }));
+                        invalidate();
+                      }}
+                    >
+                      <Icon name="check" size={12} /> {t("project.noteMerged")}
+                    </button>
+                  </span>
+                </div>
+                <div className="update-body">
+                  <Markdown text={n.body} />
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>
@@ -774,6 +822,7 @@ function ProjectSettings({ project, onClose }: { project: Project; onClose: () =
     priority: project.priority,
     color: project.color,
     owner: project.owner,
+    locked_to: project.locked_to,
   });
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
   return (
@@ -858,6 +907,11 @@ function ProjectSettings({ project, onClose }: { project: Project; onClose: () =
         <div className="field">
           <span>{t("project.owner")}</span>
           <PersonCell value={form.owner} onChange={(v) => set("owner", v)} showName />
+        </div>
+        <div className="field">
+          <span>{t("project.briefMaintainer")}</span>
+          <PersonCell value={form.locked_to} onChange={(v) => set("locked_to", v)} showName />
+          <small>{t("project.briefMaintainerHint")}</small>
         </div>
         <div className="field">
           <span>{t("project.color")}</span>

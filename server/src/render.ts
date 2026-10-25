@@ -129,7 +129,15 @@ export function renderBoard(svc: Service, ref: string, opts: { include_closed?: 
   const out: string[] = [`# ${p.key} · ${p.name}`, `Status: ${p.status} · Priority: ${p.priority}${p.owner ? ` · Owner: @${p.owner}` : ""}`];
   if (p.repo_path || p.repo_url) out.push(`Repo: ${[p.repo_path, p.repo_url].filter(Boolean).join(" · ")}`);
   if (p.description) out.push("", p.description);
-  out.push("", "## Brief (project memory)", p.brief || "_Empty. Agents: keep this updated with goals, architecture and conventions._");
+  out.push("", "## Brief (project memory)");
+  if (p.brief_as_of) out.push(`_Knowledge as of ${p.brief_as_of.slice(0, 10)} · by @${p.brief_by ?? "?"}${p.brief_evidence ? ` · ${p.brief_evidence}` : ""}${p.locked_to ? ` · maintained by @${p.locked_to}` : ""}_`);
+  out.push(p.brief || "_Empty. Agents: keep this updated with goals, architecture and conventions._");
+  const notes = svc.briefNotes(p.id);
+  if (notes.length) {
+    out.push("", `### Notes waiting to be merged into the brief (${notes.length})`);
+    for (const n of notes) out.push(`- _(${n.id}) @${n.author ?? "?"}${n.as_of ? `, as of ${n.as_of.slice(0, 10)}` : ""}${n.evidence ? `, ${n.evidence}` : ""}:_ ${n.body.replace(/\s+/g, " ")}`);
+    out.push("_If you maintain this brief: fold the still-true parts in with update_project and pass their ids as merged_notes._");
+  }
   for (const g of groups) {
     const gt = tasks.filter((t) => t.group_id === g.id && !t.parent_id);
     out.push("", `## ${g.name} (${gt.length})`);
@@ -222,7 +230,12 @@ export function renderOnboarding(svc: Service, actorId: string): string {
     "1. Find it in the list above. Match by git remote first (`git remote get-url origin`), then folder name, then name.",
     "2. If it is missing, call `create_project` with `name`, `repo_url` (the git remote) and `repo_path` (your local checkout).",
     "   The desk returns the existing project instead of creating a twin when the remote, folder or name match — that is expected.",
-    "3. If the project has no brief yet, write one with `update_project` (goal, stack, how to run/test, conventions). If it has one, only add what is missing.",
+    "3. Work out how current your knowledge of the project is: the date of your last session/conversation on it, or of the",
+    "   latest commit you know (`git log -1 --format=%cs`). That date is your **as_of**. Different agents know different things —",
+    "   the desk lets the most recent knowledge win.",
+    "4. Brief: if the project has none, write one with `update_project` (goal, stack, how to run/test, conventions) and pass",
+    "   `as_of` + `evidence`. If it has one, read it (`project_board` shows its as-of date). Replace it only if your as_of is newer;",
+    "   otherwise — or if the desk refuses with stale_knowledge — add what is missing with `add_brief_note`.",
     "",
     "## Step 2 — Tasks",
     "For each open piece of work you know about (TODOs you track, open issues you own, unfinished work in your context):",
@@ -233,6 +246,8 @@ export function renderOnboarding(svc: Service, actorId: string): string {
     "   - if you are actively doing it and it is unowned, `claim_task` it.",
     "   Only if it is genuinely different, call `create_task` again with `force: true`.",
     "3. Link dependencies with `update_task` (`blocked_by`) when one task waits on another.",
+    "   When you set a status from memory (e.g. you believe something is done), pass `as_of`; if the desk says the status",
+    "   changed after your knowledge, leave it and `comment` instead.",
     "4. Do not import finished work, except as a one-line note in the project brief if it matters for context.",
     "",
     "## Step 3 — Decisions",

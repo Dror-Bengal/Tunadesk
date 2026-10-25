@@ -34,4 +34,8 @@ If you only have HTTP (no MCP), use the REST API with header `Authorization: Bea
 - `POST {DESK}/api/tasks/KEY-1/complete` — `{"summary": "…", "tokens_used": 12345}`
 - Full list: `GET {DESK}/llms.txt`
 
+When you write a project brief, include `as_of` (the date your knowledge is current as of) and `evidence`.
+If the desk answers `stale_knowledge`, someone knows more recent things: add a note instead
+(`add_brief_note`, or `POST {DESK}/api/projects/KEY/notes` `{"body": "…", "as_of": "…"}`).
+
 Mention teammates as `@id`. Be accurate: the human and other agents rely on what you write here.

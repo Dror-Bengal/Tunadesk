@@ -9,6 +9,7 @@ import {
   WAKING_NOTIFICATIONS,
   badRequest,
   conflict,
+  SwarmError,
   notFound,
   type DecisionStatus,
   type NotificationType,
@@ -71,8 +72,25 @@ export interface Project {
   repo_url: string;
   owner: string | null;
   brief: string;
+  /** Freshness of the brief: the knowledge date its author claimed, who wrote it and on what evidence. */
+  brief_as_of: string | null;
+  brief_by: string | null;
+  brief_evidence: string;
+  /** When set, only this actor (or a human) may replace the brief. */
+  locked_to: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface BriefNote {
+  id: string;
+  project_id: string;
+  author: string | null;
+  body: string;
+  as_of: string | null;
+  evidence: string;
+  merged_at: string | null;
+  created_at: string;
 }
 
 export interface Group {
@@ -110,6 +128,7 @@ export interface Task {
   lease_holder: string | null;
   lease_expires_at: string | null;
   handoff_count: number;
+  status_changed_at: string | null;
   blocked_by: string[];
   blocks: string[];
   subtask_count: number;
@@ -231,6 +250,15 @@ const DEFAULT_GROUPS: Array<[string, string]> = [
 const PROJECT_COLORS = ["#2f6b4f", "#8a5a1c", "#6b4a8a", "#9e2f3a", "#44546a", "#a8661c", "#2d6a6a", "#7a3b5c", "#5c6b2f", "#4e4a8c"];
 
 type Row = Record<string, unknown>;
+
+/** "2026-10-20" (end of that day) or a full ISO timestamp; never in the future. */
+export function parseAsOf(value: string): string {
+  const v = value.trim();
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(`${v}T23:59:59.999Z`) : new Date(v);
+  if (Number.isNaN(d.getTime())) throw badRequest(`as_of must be a date like 2026-10-20 (got "${value}")`);
+  const ceiling = Date.now() + 60_000;
+  return new Date(Math.min(d.getTime(), ceiling)).toISOString();
+}
 
 export class Service {
   readonly events = new EventEmitter();
@@ -648,15 +676,27 @@ export class Service {
     return this.project(id);
   }
 
-  updateProject(ref: string, patch: Partial<Omit<Project, "id" | "created_at" | "updated_at">>, by: string | null = null): Project {
+  updateProject(
+    ref: string,
+    patch: Partial<Omit<Project, "id" | "created_at" | "updated_at" | "brief_as_of" | "brief_by" | "brief_evidence">>,
+    by: string | null = null,
+    opts: { as_of?: string; evidence?: string; merged_notes?: string[] } = {},
+  ): Project {
     const p = this.project(ref);
     const fields: Record<string, string | null> = {};
-    for (const k of ["name", "description", "color", "status", "priority", "repo_path", "repo_url", "owner", "brief"] as const) {
+    for (const k of ["name", "description", "color", "status", "priority", "repo_path", "repo_url", "owner", "brief", "locked_to"] as const) {
       if (patch[k] !== undefined) fields[k] = patch[k] as string | null;
     }
     if (patch.key !== undefined && patch.key.toUpperCase() !== p.key) {
       throw badRequest("Project keys are immutable (task keys depend on them)");
     }
+    if (fields.locked_to) fields.locked_to = this.actor(fields.locked_to).id;
+    if (fields.brief !== undefined && fields.brief !== p.brief) {
+      Object.assign(fields, this.briefFreshness(p, by, opts));
+    } else if (fields.brief !== undefined) {
+      delete fields.brief;
+    }
+    if (opts.merged_notes?.length) this.markNotesMerged(p.id, opts.merged_notes, by);
     if (Object.keys(fields).length === 0) return p;
     fields.updated_at = now();
     this.db.prepare(`UPDATE projects SET ${Object.keys(fields).map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...Object.values(fields), p.id);
@@ -667,6 +707,55 @@ export class Service {
       data: { fields: what, status: fields.status },
     });
     return this.project(p.id);
+  }
+
+  /**
+   * Who may replace a brief: humans always; agents only when the project is not locked to someone else and
+   * their knowledge is at least as recent as the knowledge behind the current brief.
+   */
+  private briefFreshness(p: Project, by: string | null, opts: { as_of?: string; evidence?: string }): Record<string, string | null> {
+    if (this.isHuman(by)) return { brief_as_of: now(), brief_by: by, brief_evidence: opts.evidence ?? "edited by a human" };
+    if (p.locked_to && p.locked_to !== by) {
+      throw new SwarmError(409, "brief_locked", `The brief of ${p.key} is maintained by @${p.locked_to}. Add what you know with add_brief_note instead.`);
+    }
+    const asOf = opts.as_of ? parseAsOf(opts.as_of) : null;
+    if (!asOf && p.brief.trim()) {
+      throw badRequest(`as_of is required to replace an existing brief: the date your knowledge of ${p.key} is current as of (last session, conversation or commit you are basing this on).`);
+    }
+    if (asOf && p.brief_as_of && asOf < p.brief_as_of) {
+      throw new SwarmError(
+        409,
+        "stale_knowledge",
+        `The brief of ${p.key} reflects knowledge as of ${p.brief_as_of.slice(0, 10)} (by @${p.brief_by ?? "?"}${p.brief_evidence ? `, ${p.brief_evidence}` : ""}); yours is as of ${asOf.slice(0, 10)}. Do not replace it — add what you know with add_brief_note so the more up-to-date agent or the human can merge it.`,
+        { current_as_of: p.brief_as_of, current_by: p.brief_by, your_as_of: asOf },
+      );
+    }
+    return { brief_as_of: asOf ?? now(), brief_by: by, brief_evidence: opts.evidence ?? "" };
+  }
+
+  briefNotes(projectRef: string, opts: { include_merged?: boolean } = {}): BriefNote[] {
+    const p = this.project(projectRef);
+    return (this.db
+      .prepare(`SELECT * FROM brief_notes WHERE project_id = ? ${opts.include_merged ? "" : "AND merged_at IS NULL"} ORDER BY COALESCE(as_of, created_at) DESC`)
+      .all(p.id) as Row[]).map((r) => plain<BriefNote>(r));
+  }
+
+  /** Knowledge an agent has but may not write into the brief directly (older, or the brief is locked). */
+  addBriefNote(projectRef: string, by: string | null, input: { body: string; as_of?: string; evidence?: string }): BriefNote {
+    const p = this.project(projectRef);
+    if (!input.body?.trim()) throw badRequest("Note body is empty");
+    const id = newId("bn_");
+    this.db
+      .prepare("INSERT INTO brief_notes (id, project_id, author, body, as_of, evidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(id, p.id, by, input.body.trim(), input.as_of ? parseAsOf(input.as_of) : null, input.evidence ?? "", now());
+    this.log(by, "project.brief_note", { project_id: p.id, summary: `Note on the ${p.key} brief${input.as_of ? ` (as of ${input.as_of.slice(0, 10)})` : ""}: ${truncate(input.body.replace(/\s+/g, " "), 120)}` });
+    return plain<BriefNote>(this.db.prepare("SELECT * FROM brief_notes WHERE id = ?").get(id));
+  }
+
+  markNotesMerged(projectId: string, ids: string[], by: string | null) {
+    const ts = now();
+    for (const id of ids) this.db.prepare("UPDATE brief_notes SET merged_at = ? WHERE id = ? AND project_id = ? AND merged_at IS NULL").run(ts, id, projectId);
+    this.log(by, "project.brief_notes_merged", { project_id: projectId, summary: `${ids.length} brief note(s) merged` });
   }
 
   deleteProject(ref: string, by: string | null = null) {
@@ -862,8 +951,8 @@ export class Service {
       this.db
         .prepare(
           `INSERT INTO tasks (id, project_id, group_id, number, key, title, description, status, priority, type, assignee, reporter, parent_id, tags, due_at,
-            started_at, completed_at, estimate_tokens, position, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            started_at, completed_at, estimate_tokens, position, created_at, updated_at, status_changed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -885,6 +974,7 @@ export class Service {
           CLOSED_STATUSES.includes(status) ? ts : null,
           input.estimate_tokens ?? 0,
           Number(maxPos.m) + 1,
+          ts,
           ts,
           ts,
         );
@@ -913,11 +1003,25 @@ export class Service {
       estimate_tokens?: number;
       position?: number;
       project?: string;
+      /** For status changes based on remembered (not live) knowledge: the date that knowledge is current as of. */
+      as_of?: string;
     },
     by: string | null = null,
   ): Task {
     const t = this.taskRow(ref);
     this.assertNotLeasedByOther(t, by);
+    if (patch.status !== undefined && patch.status !== t.status && patch.as_of && !this.isHuman(by)) {
+      const asOf = parseAsOf(patch.as_of);
+      const changed = t.status_changed_at as string | null;
+      if (changed && asOf < changed) {
+        throw new SwarmError(
+          409,
+          "stale_knowledge",
+          `${t.key} was set to "${t.status}" on ${changed.slice(0, 10)}, after your knowledge (as of ${asOf.slice(0, 10)}). Leave the status; add what you know with comment.`,
+          { status: t.status, status_changed_at: changed, your_as_of: asOf },
+        );
+      }
+    }
     const fields: Record<string, string | number | null> = {};
     const changes: string[] = [];
     const ts = now();
@@ -932,6 +1036,7 @@ export class Service {
     if (patch.status !== undefined && patch.status !== t.status) {
       if (!TASK_STATUSES.includes(patch.status)) throw badRequest(`Unknown status '${patch.status}'`);
       fields.status = patch.status;
+      fields.status_changed_at = ts;
       if (patch.status === "in_progress" && !t.started_at) fields.started_at = ts;
       if (CLOSED_STATUSES.includes(patch.status)) {
         fields.completed_at = ts;
@@ -1081,9 +1186,9 @@ export class Service {
       const status = ["backlog", "todo", "blocked"].includes(t.status as string) ? "in_progress" : (t.status as string);
       this.db
         .prepare(
-          "UPDATE tasks SET lease_holder = ?, lease_expires_at = ?, assignee = COALESCE(assignee, ?), status = ?, started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?",
+          "UPDATE tasks SET lease_holder = ?, lease_expires_at = ?, assignee = COALESCE(assignee, ?), status = ?, started_at = COALESCE(started_at, ?), updated_at = ?, status_changed_at = CASE WHEN status = ? THEN status_changed_at ELSE ? END WHERE id = ?",
         )
-        .run(a.id, until, a.id, status, ts, ts, t.id as string);
+        .run(a.id, until, a.id, status, ts, ts, status, ts, t.id as string);
       if (holder !== a.id) {
         this.log(a.id, "task.claimed", { project_id: t.project_id as string, task_id: t.id as string, summary: `${a.name} picked up ${t.key}`, data: { until } });
       }
@@ -1121,8 +1226,8 @@ export class Service {
         const target = this.actor(input.next_assignee);
         const { count, tripped } = this.loopGuard(t, a.id);
         this.db
-          .prepare("UPDATE tasks SET status = ?, assignee = ?, handoff_count = ?, updated_at = ? WHERE id = ?")
-          .run(tripped ? "blocked" : status, tripped ? (t.assignee as string | null) : target.id, count, now(), t.id as string);
+          .prepare("UPDATE tasks SET status = ?, assignee = ?, handoff_count = ?, updated_at = ?, status_changed_at = ? WHERE id = ?")
+          .run(tripped ? "blocked" : status, tripped ? (t.assignee as string | null) : target.id, count, now(), now(), t.id as string);
         this.log(a.id, "task.status", {
           project_id: t.project_id as string,
           task_id: t.id as string,
@@ -1173,7 +1278,9 @@ export class Service {
         );
       }
       // Avoid a duplicate "assigned" ping — the handoff notification below carries the context.
-      this.db.prepare("UPDATE tasks SET assignee = ?, status = ?, updated_at = ?, completed_at = NULL WHERE id = ?").run(tripped ? t.assignee as string | null : to.id, status, now(), t.id as string);
+      this.db
+        .prepare("UPDATE tasks SET assignee = ?, status = ?, updated_at = ?, status_changed_at = ?, completed_at = NULL WHERE id = ?")
+        .run(tripped ? (t.assignee as string | null) : to.id, status, now(), now(), t.id as string);
       this.log(from.id, "task.handoff", {
         project_id: t.project_id as string,
         task_id: t.id as string,

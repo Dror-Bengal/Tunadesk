@@ -103,7 +103,18 @@ const projectCreate = z.object({
   /** Create even if a project with the same remote/folder/name exists. */
   force: z.boolean().optional(),
 });
-const projectPatch = projectCreate.omit({ groups: true, force: true }).partial().extend({ status: z.enum(PROJECT_STATUSES).optional(), owner: z.string().nullable().optional() });
+const projectPatch = projectCreate
+  .omit({ groups: true, force: true })
+  .partial()
+  .extend({
+    status: z.enum(PROJECT_STATUSES).optional(),
+    owner: z.string().nullable().optional(),
+    locked_to: z.string().nullable().optional(),
+    /** Date the writer's knowledge is current as of (required for agents replacing a brief). */
+    as_of: z.string().max(40).optional(),
+    evidence: z.string().max(300).optional(),
+    merged_notes: z.array(z.string()).max(100).optional(),
+  });
 
 const taskCreate = z.object({
   project: z.string(),
@@ -122,7 +133,10 @@ const taskCreate = z.object({
   /** Create even if similar tasks exist. */
   force: z.boolean().optional(),
 });
-const taskPatch = taskCreate.omit({ project: true, blocked_by: true, force: true }).partial().extend({ position: z.number().optional() });
+const taskPatch = taskCreate
+  .omit({ project: true, blocked_by: true, force: true })
+  .partial()
+  .extend({ position: z.number().optional(), as_of: z.string().max(40).optional() });
 
 const decisionCreate = z.object({
   project: z.string().nullable().optional(),
@@ -388,15 +402,26 @@ export function createApp(svc: Service, config: AppConfig) {
   });
   api.get("/projects/:ref", (c) => {
     const p = svc.project(c.req.param("ref"));
-    return c.json({ project: p, groups: svc.groups(p.id) });
+    return c.json({ project: p, groups: svc.groups(p.id), notes: svc.briefNotes(p.id) });
   });
   api.get("/projects/:ref/board.md", (c) => md(c, renderBoard(svc, c.req.param("ref"), { include_closed: c.req.query("closed") === "1" })));
   api.patch("/projects/:ref", async (c) => {
-    const b = await body(c, projectPatch);
+    const { as_of, evidence, merged_notes, ...b } = await body(c, projectPatch);
+    if (b.locked_to !== undefined && c.get("actor").kind !== "human") throw forbidden("Only humans lock a project's brief");
     // Woken agents run inside repo_path, so only a human may point an existing project somewhere else.
     if (b.repo_path !== undefined && c.get("actor").kind !== "human" && b.repo_path !== svc.project(c.req.param("ref")).repo_path)
       throw forbidden("Only humans can change a project's repo path");
-    return c.json(svc.updateProject(c.req.param("ref"), b, c.get("actor").id));
+    return c.json(svc.updateProject(c.req.param("ref"), b, c.get("actor").id, { as_of, evidence, merged_notes }));
+  });
+  api.get("/projects/:ref/notes", (c) => c.json(svc.briefNotes(c.req.param("ref"), { include_merged: c.req.query("all") === "1" })));
+  api.post("/projects/:ref/notes", async (c) => {
+    const b = await body(c, z.object({ body: z.string().min(1).max(20_000), as_of: z.string().max(40).optional(), evidence: z.string().max(300).optional() }));
+    return c.json(svc.addBriefNote(c.req.param("ref"), c.get("actor").id, b), 201);
+  });
+  api.post("/projects/:ref/notes/merged", async (c) => {
+    const b = await body(c, z.object({ ids: z.array(z.string()).min(1).max(100) }));
+    svc.markNotesMerged(svc.project(c.req.param("ref")).id, b.ids, c.get("actor").id);
+    return c.json({ ok: true });
   });
   api.delete("/projects/:ref", (c) => {
     requireHuman(c);
