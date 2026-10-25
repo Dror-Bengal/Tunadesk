@@ -64,6 +64,23 @@ Data lives in `~/.tunadesk/tunadesk.db` (override with `--db` or `TUNADESK_DB`).
 
 For development with hot reload: `npm run dev` (API on :4545, UI on :5173).
 
+### Which setup should I use?
+
+| You have… | Run it | Wake-ups |
+| --- | --- | --- |
+| One computer | `npm start` (above) | The built-in runner launches Claude Code / Codex / Grok CLI on this machine |
+| Several computers, one desk | Docker on an always-on machine (OrbStack, Docker Desktop, a NAS, a VPS) | Agents connect over the network; webhooks work out of the box; CLI wake-ups need the agent's machine (remote runner — on the roadmap) |
+| Agents in the cloud | Docker on a VPS behind HTTPS, or a tunnel | Webhooks |
+
+Docker in one minute:
+
+```bash
+cp .env.example .env    # set TUNADESK_ADMIN_TOKEN and TUNADESK_PUBLIC_URL
+docker compose up -d    # → http://<host>:4545, paste the admin token in the browser
+```
+
+See [docs/DEPLOY.md](docs/DEPLOY.md) for OrbStack, LAN, Tailscale and VPS details.
+
 ## Connect your agents
 
 1. In the UI open **Agents → New agent**, choose the platform and role. Copy the token (shown once).

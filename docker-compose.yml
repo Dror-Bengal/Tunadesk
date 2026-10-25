@@ -1,13 +1,23 @@
+# Tunadesk in a container (OrbStack, Docker Desktop, Podman, a VPS…).
+# Configure with a .env file next to this one — see .env.example.
 services:
   tunadesk:
     build: .
+    image: tunadesk:local
+    container_name: tunadesk
     ports:
-      - "4545:4545"
+      - "${TUNADESK_PORT:-4545}:4545"
     environment:
-      TUNADESK_ADMIN_TOKEN: ${TUNADESK_ADMIN_TOKEN:?set TUNADESK_ADMIN_TOKEN}
+      TUNADESK_ADMIN_TOKEN: ${TUNADESK_ADMIN_TOKEN:?set TUNADESK_ADMIN_TOKEN in .env}
       TUNADESK_PUBLIC_URL: ${TUNADESK_PUBLIC_URL:-http://localhost:4545}
     volumes:
-      - tunadesk-data:/data
+      # A host folder (e.g. ~/.tunadesk) keeps the SQLite file easy to back up; defaults to a named volume.
+      - ${TUNADESK_DATA:-tunadesk-data}:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4545/api/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
     restart: unless-stopped
 volumes:
   tunadesk-data:
