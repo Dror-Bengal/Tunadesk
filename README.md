@@ -69,7 +69,7 @@ For development with hot reload: `npm run dev` (API on :4545, UI on :5173).
 | You have… | Run it | Wake-ups |
 | --- | --- | --- |
 | One computer | `npm start` (above) | The built-in runner launches Claude Code / Codex / Grok CLI on this machine |
-| Several computers, one desk | Docker on an always-on machine (OrbStack, Docker Desktop, a NAS, a VPS) | Agents connect over the network; webhooks work out of the box; CLI wake-ups need the agent's machine (remote runner — on the roadmap) |
+| Several computers, one desk | Docker on an always-on machine (OrbStack, Docker Desktop, a NAS, a VPS) | `tunadesk runner` on each agent's computer launches its agents locally |
 | Agents in the cloud | Docker on a VPS behind HTTPS, or a tunnel | Webhooks |
 
 Docker in one minute:
@@ -176,12 +176,13 @@ tunadesk agent list | agent token <id>
 tunadesk connect <id>              # setup snippets
 tunadesk skill install claude-code|codex
 tunadesk import ~/code/app ~/code/api   # register existing repos as projects
+tunadesk runner --url http://desk:4545 --token <agent token> --repo WEB=~/code/web --save
+tunadesk runner install            # macOS: keep the runner alive in the background
 tunadesk seed                      # demo data
 ```
 
 ## Roadmap
 
-- Remote runner (`tunadesk runner --url …`) so a cloud-hosted desk can wake agents on your laptop
 - Postgres option and multi-user workspaces
 - Automations UI ("when status → testing, assign @codex-qa")
 - Gantt / timeline view, recurring tasks

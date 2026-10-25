@@ -58,6 +58,11 @@ export function AgentsPage({ agentId }: { agentId?: string }) {
               <Pill color={AGENT_STATUS_COLOR[a.status] ?? "#6e675c"} outline>
                 {t(`astatus.${a.status}` as MessageKey)}
               </Pill>
+              {a.runners?.length ? (
+                <Pill color="#2f6b4f" outline>
+                  <Icon name="link" size={12} /> {a.runners[0].name}
+                </Pill>
+              ) : null}
               {a.trigger.enabled && a.trigger.type !== "none" && (
                 <Pill color="#44546a" outline>
                   <Icon name="bolt" size={12} /> {a.trigger.type}
@@ -320,6 +325,17 @@ function AgentDetailPage({ id }: { id: string }) {
         </button>
       </div>
 
+      {a.trigger.type !== "none" && a.trigger.type !== "webhook" && (
+        <div className={`callout${data.runners.length || a.trigger.where === "desk" ? "" : " warn"}`}>
+          <Icon name="link" size={15} />
+          <span>
+            {data.runners.length
+              ? t("agents.runnerOnline", { name: data.runners.map((r) => `${r.name} · ${relTime(r.since, locale)}`).join(", ") })
+              : `${t("agents.runnerOffline")} — ${t("agents.runnerHint")}`}
+          </span>
+        </div>
+      )}
+
       <div className="tabs" role="tablist">
         {(
           [
@@ -491,6 +507,18 @@ function TriggerForm({ actor }: { actor: Actor }) {
           ))}
         </select>
       </label>
+      {f.type !== "none" && f.type !== "webhook" && (
+        <label className="field">
+          <span>{t("agents.where")}</span>
+          <select className="select" value={f.where ?? "auto"} onChange={(e) => set("where", e.target.value as TriggerConfig["where"])}>
+            {(["auto", "desk", "remote"] as const).map((w) => (
+              <option key={w} value={w}>
+                {t(`agents.where.${w}`)}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {f.type !== "none" && (
         <>
           <label className="check">

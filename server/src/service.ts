@@ -1433,6 +1433,13 @@ export class Service {
       .all(...params) as Row[]).map((r) => plain<Run>(r));
   }
 
+  /** Runs a previous desk process started but never finished (restart, crash): close them out. */
+  failOrphanRuns(): number {
+    const rows = this.db.prepare("SELECT id FROM runs WHERE status IN ('queued', 'running')").all() as Row[];
+    for (const r of rows) this.finishRun(r.id as string, { status: "failed", reason: "the desk restarted before the run reported back" });
+    return rows.length;
+  }
+
   recentRunCount(actorId: string, taskId: string | null, sinceMinutes: number): number {
     const since = new Date(Date.now() - sinceMinutes * 60_000).toISOString();
     const row = this.db

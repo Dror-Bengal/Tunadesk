@@ -5,6 +5,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, extname, normalize, sep } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import type { Service, Actor, Activity } from "../service.js";
+import type { Runner } from "../runner/runner.js";
 import {
   DECISION_STATUSES,
   PLATFORMS,
@@ -37,6 +38,8 @@ export interface AppConfig {
   version: string;
   /** URL agents use to reach the desk (shown in setup snippets). */
   deskUrl?: string;
+  /** Wake-up dispatcher; enables `tunadesk runner` connections. */
+  runner?: Runner;
 }
 
 type Env = {
@@ -62,6 +65,7 @@ const triggerSchema = z
     secret: z.string().optional(),
     timeout_minutes: z.number().positive().max(24 * 60).optional(),
     respect_budget: z.boolean().optional(),
+    where: z.enum(["auto", "desk", "remote"]).optional(),
   })
   .partial();
 
@@ -293,7 +297,7 @@ export function createApp(svc: Service, config: AppConfig) {
   // actors
   api.get("/actors", (c) => {
     const actors = svc.listActors({ include_archived: c.req.query("archived") === "1" });
-    return c.json(actors.map((a) => ({ ...a, budget: svc.budget(a.id), unread: svc.unreadCount(a.id) })));
+    return c.json(actors.map((a) => ({ ...a, budget: svc.budget(a.id), unread: svc.unreadCount(a.id), runners: config.runner?.remoteStatus(a.id) ?? [] })));
   });
   api.post("/actors", async (c) => {
     requireHuman(c);
@@ -305,6 +309,7 @@ export function createApp(svc: Service, config: AppConfig) {
     const a = svc.actor(c.req.param("id"));
     return c.json({
       actor: a,
+      runners: config.runner?.remoteStatus(a.id) ?? [],
       budget: svc.budget(a.id),
       tasks: svc.listTasks({ assignee: a.id }),
       next: svc.recommend(a.id, 8),
@@ -516,6 +521,42 @@ export function createApp(svc: Service, config: AppConfig) {
     const run = svc.run(c.req.param("id"));
     if (c.get("actor").kind !== "human" && run.actor !== c.get("actor").id) throw forbidden("Not your run");
     return c.json(run);
+  });
+
+  // remote runners: `tunadesk runner` on an agent's machine listens here with that agent's token
+  api.get("/runner/stream", (c) => {
+    const me = c.get("actor");
+    if (me.kind !== "agent") throw badRequest("Connect a runner with an agent token");
+    const runner = config.runner;
+    if (!runner) throw new SwarmError(503, "runner_disabled", "Wake-ups are disabled on this desk (--no-runner)");
+    const name = (c.req.query("name") ?? "runner").slice(0, 60);
+    return streamSSE(c, async (stream) => {
+      let alive = true;
+      const detach = runner.attachRemote(me.id, name, (event, data) => {
+        if (!alive) return false;
+        void stream.writeSSE({ event, data: JSON.stringify(data) });
+        return true;
+      });
+      stream.onAbort(() => {
+        alive = false;
+        detach();
+      });
+      const { secret: _secret, url: _url, ...trigger } = svc.triggerConfig(me.id);
+      await stream.writeSSE({ event: "hello", data: JSON.stringify({ actor: me.id, name: me.name, trigger }) });
+      while (alive) {
+        await stream.sleep(20_000);
+        if (alive) await stream.writeSSE({ event: "ping", data: "{}" });
+      }
+    });
+  });
+  api.post("/runner/runs/:id/finish", async (c) => {
+    const b = await body(
+      c,
+      z.object({ status: z.enum(["succeeded", "failed"]), exit_code: z.number().int().nullable().optional(), output: z.string().max(200_000).optional(), reason: z.string().max(500).optional() }),
+    );
+    if (!config.runner?.finishRemote(c.req.param("id"), c.get("actor").id, { status: b.status, exit_code: b.exit_code ?? null, output: b.output ?? "", reason: b.reason }))
+      throw new SwarmError(404, "not_found", "No such run waiting for this agent");
+    return c.json({ ok: true });
   });
 
   // live updates

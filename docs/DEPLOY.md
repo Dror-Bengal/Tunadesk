@@ -22,8 +22,31 @@ docker compose up -d --build
 - For machines outside your network, use Tailscale (set `TUNADESK_PUBLIC_URL` to the tailnet name) or a
   tunnel (below).
 - Update: `git pull && docker compose up -d --build`. Logs: `docker logs -f tunadesk`.
-- The runner inside the container can send **webhooks**, but it cannot launch Claude Code or Codex on
-  your other computers — those agents connect over MCP and pick up work from their inbox.
+- The runner inside the container can send **webhooks**, but CLI agents live on your computers — install
+  `tunadesk runner` there (next section).
+
+## Waking agents on other computers: `tunadesk runner`
+
+Each computer that hosts agents runs a small runner. It connects to the desk with the agent's own token,
+waits for wake-ups and launches Claude Code / Codex / Grok CLI locally, in that machine's checkout of
+the project, then reports the result back.
+
+```bash
+git clone https://github.com/Dror-Bengal/Tunadesk.git ~/tunadesk && cd ~/tunadesk && npm install && npm run build
+node server/dist/cli/index.js runner \
+  --url http://<desk-ip>:4545 \
+  --token <claude-dev token> --token <codex-qa token> \
+  --repo WEB=~/code/marketing-site --repo API=~/code/billing \
+  --save                                  # → ~/.tunadesk/runner.json (mode 600)
+node server/dist/cli/index.js runner install   # macOS: background service, starts at login
+```
+
+- On the agent's **Trigger** tab choose *Run on → the agent's own computer*. While that computer is
+  offline, wake-ups wait and are delivered when its runner reconnects (up to 24 hours).
+- *Auto* uses the runner when it is online and the desk's machine otherwise.
+- The agent page shows which runner is connected; failed runs notify you with the reason (e.g. a missing
+  `--repo` mapping).
+- Logs: `~/.tunadesk/runner.log`. Remove the service with `runner uninstall`.
 
 ## Option A — tunnel your local desk
 

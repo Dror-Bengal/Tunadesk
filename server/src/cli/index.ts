@@ -13,6 +13,10 @@ import { createMcpServer, type DeskCall } from "../mcp/server.js";
 import { connectSnippets, skillsDir } from "../connect.js";
 import { PLATFORMS, ROLES, TRIGGER_TYPES, type TriggerType } from "../domain.js";
 import { seedDemo } from "./seed.js";
+import { startRemoteRunner } from "../runner/remote.js";
+import { hostname } from "node:os";
+import { writeFileSync } from "node:fs";
+import { cliPath } from "../connect.js";
 
 const HELP = `🐟 Tunadesk ${VERSION} — a shared task desk for AI agents and their human
 
@@ -29,6 +33,15 @@ Commands
 
   mcp                        Stdio MCP bridge for agents (env TUNADESK_URL, TUNADESK_TOKEN)
   briefing                   Print the caller's briefing (for SessionStart hooks; silent if the desk is down)
+
+  runner                     Run on an agent's machine: wake its local CLI agents when the desk asks
+      --url <desk>           Desk URL as reachable from this machine
+      --token <agent token>  Repeat for each agent that lives on this machine
+      --repo KEY=/path       Repeat: where each project is checked out on this machine
+      --name <label>         Shown on the desk (default: hostname)
+      --save                 Store these settings in ~/.tunadesk/runner.json (then just run "tunadesk runner")
+      --config <file>        Use another settings file
+  runner install|uninstall   macOS: keep the saved runner running in the background, start at login
 
   agent add <id>             Register an agent and print its token + setup snippets
       --name, --platform (${PLATFORMS.join("|")}),
@@ -87,7 +100,10 @@ async function main() {
       period: { type: "string" },
       trigger: { type: "string" },
       url: { type: "string" },
-      token: { type: "string" },
+      token: { type: "string", multiple: true },
+      repo: { type: "string", multiple: true },
+      config: { type: "string" },
+      save: { type: "boolean" },
       dir: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
@@ -114,7 +130,7 @@ async function main() {
 
     case "mcp": {
       const url = (values.url ?? process.env.TUNADESK_URL ?? "http://127.0.0.1:4545").replace(/\/$/, "");
-      const token = values.token ?? process.env.TUNADESK_TOKEN;
+      const token = values.token?.[0] ?? process.env.TUNADESK_TOKEN;
       if (!token) console.error("[tunadesk mcp] TUNADESK_TOKEN is not set — requests will only work against a local desk, acting as the owner.");
       const call: DeskCall = async (method, path, body) => {
         const headers: Record<string, string> = {};
@@ -130,13 +146,51 @@ async function main() {
 
     case "briefing": {
       const url = (values.url ?? process.env.TUNADESK_URL ?? "http://127.0.0.1:4545").replace(/\/$/, "");
-      const token = values.token ?? process.env.TUNADESK_TOKEN;
+      const token = values.token?.[0] ?? process.env.TUNADESK_TOKEN;
       try {
         const res = await fetch(`${url}/api/briefing.md`, { headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(4000) });
         if (res.ok) console.log(await res.text());
       } catch {
         /* the desk is optional: never break the agent's session */
       }
+      return;
+    }
+
+    case "runner": {
+      const file = resolve(values.config ?? join(homedir(), ".tunadesk", "runner.json"));
+      if (positionals[0] === "install" || positionals[0] === "uninstall") {
+        installRunnerService(positionals[0], file);
+        return;
+      }
+      const saved = existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as { url?: string; name?: string; tokens?: string[]; repos?: Record<string, string> }) : {};
+      const repos: Record<string, string> = { ...(saved.repos ?? {}) };
+      for (const r of values.repo ?? []) {
+        const i = r.indexOf("=");
+        if (i < 1) throw new Error(`--repo expects KEY=/path, got "${r}"`);
+        repos[r.slice(0, i).toUpperCase()] = resolve(r.slice(i + 1));
+      }
+      const envTokens = (process.env.TUNADESK_TOKEN ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+      const tokens = [...new Set([...(saved.tokens ?? []), ...envTokens, ...(values.token ?? [])])];
+      const url = (values.url ?? process.env.TUNADESK_URL ?? saved.url ?? "").replace(/\/$/, "");
+      const name = values.name ?? saved.name ?? hostname().replace(/\.local$/, "");
+      if (!url || !tokens.length) throw new Error("Usage: tunadesk runner --url http://desk:4545 --token <agent token> [--repo KEY=/path] [--save]");
+      if (values.save) {
+        mkdirSync(resolve(file, ".."), { recursive: true });
+        writeFileSync(file, JSON.stringify({ url, name, tokens, repos }, null, 2) + "\n", { mode: 0o600 });
+        console.log(`Saved runner settings → ${file} (readable only by you)`);
+      }
+      console.log(`🐟 Tunadesk runner "${name}" → ${url} · ${tokens.length} agent(s) · ${Object.keys(repos).length} repo mapping(s)`);
+      for (const [k, v] of Object.entries(repos)) console.log(`   ${k.padEnd(8)} ${v}${existsSync(v) ? "" : "  (missing!)"}`);
+      // Never die because whoever reads our log went away (closed pipe, rotated log).
+      process.stdout.on("error", () => {});
+      process.stderr.on("error", () => {});
+      const handle = startRemoteRunner({ url, tokens, repos, name, cliPath: cliPath() });
+      const quit = () => {
+        handle.stop();
+        process.exit(0);
+      };
+      process.on("SIGINT", quit);
+      process.on("SIGTERM", quit);
       return;
     }
 
@@ -180,7 +234,7 @@ async function main() {
     case "connect": {
       const id = positionals[0];
       if (!id) throw new Error("Usage: tunadesk connect <agent-id> [--token ...]");
-      printSnippets(deskUrlFor(values), id, values.token);
+      printSnippets(deskUrlFor(values), id, values.token?.[0]);
       return;
     }
 
@@ -256,6 +310,54 @@ async function main() {
       console.log(HELP);
       process.exitCode = 1;
   }
+}
+
+/** Keep `tunadesk runner` alive in the background and start it at login (macOS launchd). */
+function installRunnerService(action: "install" | "uninstall", configFile: string) {
+  const label = "ai.tunadesk.runner";
+  const plist = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
+  const log = join(homedir(), ".tunadesk", "runner.log");
+  if (process.platform !== "darwin") {
+    console.log("Automatic install is macOS-only for now. On Linux, create a systemd user service that runs:");
+    console.log(`  ${process.execPath} ${cliPath()} runner --config ${configFile}`);
+    return;
+  }
+  const uid = process.getuid?.() ?? 501;
+  const launchctl = (...args: string[]) => {
+    try {
+      execFileSync("launchctl", args, { stdio: "ignore" });
+    } catch {
+      /* not loaded */
+    }
+  };
+  launchctl("bootout", `gui/${uid}/${label}`);
+  if (action === "uninstall") {
+    if (existsSync(plist)) {
+      execFileSync("rm", [plist]);
+    }
+    console.log("Runner service removed.");
+    return;
+  }
+  if (!existsSync(configFile)) throw new Error(`No runner settings at ${configFile} — run "tunadesk runner --url … --token … --save" first`);
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${label}</string>
+  <key>ProgramArguments</key><array>
+    <string>${process.execPath}</string><string>${cliPath()}</string><string>runner</string><string>--config</string><string>${configFile}</string>
+  </array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"}</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${log}</string>
+  <key>StandardErrorPath</key><string>${log}</string>
+</dict></plist>
+`;
+  mkdirSync(resolve(plist, ".."), { recursive: true });
+  writeFileSync(plist, xml);
+  launchctl("bootstrap", `gui/${uid}`, plist);
+  console.log(`Runner installed as a background service (${label}). Logs: ${log}`);
+  console.log(`Remove with: tunadesk runner uninstall`);
 }
 
 main().catch((err) => {

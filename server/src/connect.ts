@@ -102,6 +102,19 @@ export function connectSnippets(opts: { deskUrl: string; agentId: string; token?
       ].join("\n"),
     },
     {
+      id: "runner",
+      title: "Wake-ups on the agent's computer (tunadesk runner)",
+      description:
+        "Run this on the computer where the agent lives (needs Node 22 and a Tunadesk checkout). It keeps a connection to the desk and launches the agent locally when it is woken. Map each project to its local folder with --repo; --save remembers the settings in ~/.tunadesk/runner.json.",
+      language: "bash",
+      code: [
+        "git clone https://github.com/Dror-Bengal/Tunadesk.git ~/tunadesk && cd ~/tunadesk && npm install && npm run build",
+        `node ~/tunadesk/server/dist/cli/index.js runner --url ${url} --token ${token} --repo KEY=/path/to/checkout --save`,
+        "# keep it running in the background and start at login (macOS):",
+        "node ~/tunadesk/server/dist/cli/index.js runner install",
+      ].join("\n"),
+    },
+    {
       id: "curl",
       title: "Smoke test",
       description: "Check the token works.",

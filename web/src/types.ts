@@ -27,6 +27,7 @@ export interface TriggerConfig {
   respect_budget?: boolean;
   /** Set when a webhook secret is stored; the secret itself is never sent to clients. */
   has_secret?: boolean;
+  where?: "auto" | "desk" | "remote";
 }
 
 export interface Budget {
@@ -59,6 +60,7 @@ export interface Actor {
   created_at: string;
   budget?: Budget;
   unread?: number;
+  runners?: Array<{ name: string; since: string }>;
 }
 
 export interface Project {
@@ -239,6 +241,7 @@ export interface TaskDetail {
 
 export interface AgentDetail {
   actor: Actor;
+  runners: Array<{ name: string; since: string }>;
   budget: Budget;
   tasks: Task[];
   next: Recommendation[];

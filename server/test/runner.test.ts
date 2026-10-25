@@ -85,3 +85,16 @@ describe("runner failures", () => {
     }
   });
 });
+
+describe("restarts", () => {
+  it("closes runs left open by a previous desk process", async () => {
+    const { openDb } = await import("../src/db/index.js");
+    const { Service } = await import("../src/service.js");
+    const svc = new Service(openDb(":memory:"));
+    svc.createActor({ id: "dev", name: "Dev" });
+    const run = svc.createRun({ actor: "dev", trigger_type: "claude" });
+    expect(svc.failOrphanRuns()).toBe(1);
+    expect(svc.run(run.id).status).toBe("failed");
+    expect(svc.run(run.id).reason).toMatch(/restarted/);
+  });
+});

@@ -46,7 +46,7 @@ export function bootstrap(svc: Service, ownerName = "Me") {
   }
 }
 
-export function buildDesk(svc: Service, opts: { adminToken?: string; trustLocal: boolean; webDir?: string; deskUrl?: string }) {
+export function buildDesk(svc: Service, opts: { adminToken?: string; trustLocal: boolean; webDir?: string; deskUrl?: string; runner?: Runner }) {
   // In-process REST calls on behalf of an MCP client; `app` is assigned right below.
   let app: ReturnType<typeof createApp>;
   const callAs =
@@ -66,6 +66,7 @@ export function buildDesk(svc: Service, opts: { adminToken?: string; trustLocal:
     trustLocal: opts.trustLocal,
     webDir: opts.webDir,
     deskUrl: opts.deskUrl,
+    runner: opts.runner,
     version: VERSION,
     mcp: async (req, actor) => {
       const server = createMcpServer(callAs(actor.id), VERSION);
@@ -93,18 +94,18 @@ export function startServer(opts: ServeOptions) {
     throw new Error(`Refusing to listen on ${opts.host} without TUNADESK_ADMIN_TOKEN — anyone on the network could control your agents.`);
   }
   const deskUrl = (opts.publicUrl ?? `http://127.0.0.1:${opts.port}`).replace(/\/$/, "");
-  const app = buildDesk(svc, { adminToken: opts.adminToken, trustLocal: true, webDir: opts.webDir ?? defaultWebDir(), deskUrl });
+  const runner = opts.runner
+    ? new Runner(svc, { deskUrl, cliPath: cliPath(), debounceMs: opts.runnerDebounceMs, log: opts.quiet ? () => {} : undefined })
+    : null;
+  const app = buildDesk(svc, { adminToken: opts.adminToken, trustLocal: true, webDir: opts.webDir ?? defaultWebDir(), deskUrl, runner: runner ?? undefined });
 
   const server = serve({ fetch: app.fetch, port: opts.port, hostname: opts.host });
 
   const leaseTimer = setInterval(() => svc.expireLeases(), 60_000);
   leaseTimer.unref();
 
-  let runner: Runner | null = null;
-  if (opts.runner) {
-    runner = new Runner(svc, { deskUrl, cliPath: cliPath(), debounceMs: opts.runnerDebounceMs, log: opts.quiet ? () => {} : undefined });
-    runner.start();
-  }
+  svc.failOrphanRuns();
+  runner?.start();
 
   if (!opts.quiet) {
     console.log(`\n  🐟 Tunadesk ${VERSION}`);

@@ -1,12 +1,13 @@
 // The runner turns inbox notifications into actual agent runs: when a tester hands bugs to @claude-dev,
 // the runner launches Claude Code headless in the project's repo with a prompt that points it at the desk.
-import { spawn } from "node:child_process";
-import { createHmac } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+// Runs happen either here (the desk's machine) or on the agent's own machine via `tunadesk runner`.
+import { createHmac, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { Service, Actor, Activity, Notification, Task, Project } from "../service.js";
 import { WAKING_NOTIFICATIONS, type NotificationType, type TriggerConfig } from "../domain.js";
+import { buildPrompt, launchAgent, type RunResult } from "./launch.js";
+
+export { buildPrompt, resolveBinary } from "./launch.js";
 
 export interface RunnerOptions {
   /** Base URL agents use to reach the desk (REST + /mcp). */
@@ -22,16 +23,37 @@ export interface RunnerOptions {
   log?: (msg: string) => void;
 }
 
+/** What a remote runner receives when its agent should wake up. Never includes webhook secrets. */
+export interface WakeOrder {
+  run_id: string;
+  actor: { id: string; name: string; role: string };
+  trigger: Pick<TriggerConfig, "type" | "command" | "args" | "model" | "cwd" | "timeout_minutes">;
+  prompt: string;
+  token: string;
+  token_ttl_minutes: number;
+  notification_id: string;
+  task: { key: string; title: string } | null;
+  project: { key: string; name: string; repo_path: string; repo_url: string } | null;
+}
+
+interface RemoteConnection {
+  id: string;
+  actor: string;
+  name: string;
+  since: string;
+  send: (event: string, data: unknown) => boolean;
+}
+
 interface Pending {
   notifications: Notification[];
   timer?: NodeJS.Timeout;
 }
 
-const OUTPUT_LIMIT = 20_000;
-
 export class Runner {
   private pending = new Map<string, Pending>();
   private active = new Map<string, { kill: () => void }>();
+  private remotes = new Map<string, Map<string, RemoteConnection>>();
+  private remoteRuns = new Map<string, { actor: string; token: string; task: Task | null; timer: NodeJS.Timeout; conn: string }>();
   private listener = (e: Activity) => this.onEvent(e);
   private opts: Required<Omit<RunnerOptions, "log">> & { log: (msg: string) => void };
 
@@ -58,6 +80,7 @@ export class Runner {
     this.svc.events.off("event", this.listener);
     for (const p of this.pending.values()) clearTimeout(p.timer);
     for (const a of this.active.values()) a.kill();
+    for (const r of this.remoteRuns.values()) clearTimeout(r.timer);
   }
 
   /** Is a run currently executing for this actor? */
@@ -65,13 +88,72 @@ export class Runner {
     return this.active.has(actorId);
   }
 
+  // ------------------------------------------------------------------ remote runners
+
+  /** A `tunadesk runner` connected for this agent. Returns a function that detaches it. */
+  attachRemote(actorId: string, name: string, send: RemoteConnection["send"]): () => void {
+    const conn: RemoteConnection = { id: randomUUID(), actor: actorId, name: name || "runner", since: new Date().toISOString(), send };
+    const conns = this.remotes.get(actorId) ?? new Map<string, RemoteConnection>();
+    conns.set(conn.id, conn);
+    this.remotes.set(actorId, conns);
+    this.svc.touchActor(actorId, this.svc.findActor(actorId)?.status === "working" ? "working" : "idle");
+    this.opts.log(`remote runner "${conn.name}" online for ${actorId}`);
+    this.catchUp(actorId);
+    return () => {
+      conns.delete(conn.id);
+      if (!conns.size) this.remotes.delete(actorId);
+      this.opts.log(`remote runner "${conn.name}" offline for ${actorId}`);
+      // A run handed to this connection can no longer be reported: free the agent now instead of at the timeout.
+      for (const [runId, r] of this.remoteRuns) {
+        if (r.conn === conn.id) this.finishRemote(runId, actorId, { status: "failed", exit_code: null, output: "", reason: `runner "${conn.name}" disconnected during the run` });
+      }
+    };
+  }
+
+  remoteStatus(actorId: string): Array<{ name: string; since: string }> {
+    return [...(this.remotes.get(actorId)?.values() ?? [])].map((c) => ({ name: c.name, since: c.since }));
+  }
+
+  /** A remote runner reports the outcome of a run it was given. */
+  finishRemote(runId: string, actorId: string, result: RunResult): boolean {
+    const r = this.remoteRuns.get(runId);
+    if (!r || r.actor !== actorId) return false;
+    this.remoteRuns.delete(runId);
+    clearTimeout(r.timer);
+    this.svc.finishRun(runId, result);
+    this.reportFailure(actorId, r.task, result);
+    this.endRun(actorId, r.token, true);
+    return true;
+  }
+
+  /** Wake-ups that arrived while an agent's runner was offline are still unread: deliver them now. */
+  private catchUp(actorId: string) {
+    const actor = this.svc.findActor(actorId);
+    if (!actor || !this.wantsWakeups(actor)) return;
+    const on = actor.trigger.on?.length ? actor.trigger.on : WAKING_NOTIFICATIONS;
+    const since = new Date(Date.now() - 24 * 3600_000).toISOString();
+    const missed = this.svc
+      .inbox(actorId, { unread_only: true, limit: 20 })
+      .filter((n) => on.includes(n.type) && n.sender !== actorId && n.created_at >= since)
+      .reverse();
+    if (!missed.length) return;
+    const p = this.pending.get(actorId) ?? { notifications: [] };
+    for (const n of missed) if (!p.notifications.some((x) => x.id === n.id)) p.notifications.push(n);
+    this.pending.set(actorId, p);
+    this.schedule(actorId);
+  }
+
+  // ------------------------------------------------------------------ dispatch
+
+  private wantsWakeups(actor: Actor) {
+    return actor.kind === "agent" && actor.trigger.enabled && actor.trigger.type !== "none";
+  }
+
   private onEvent(e: Activity) {
     if (e.type !== "notification" || !e.data.wakes) return;
     const actor = this.svc.findActor(String(e.data.recipient));
-    if (!actor || actor.kind !== "agent") return;
-    const trigger = actor.trigger;
-    if (!trigger.enabled || trigger.type === "none") return;
-    const on = trigger.on?.length ? trigger.on : WAKING_NOTIFICATIONS;
+    if (!actor || !this.wantsWakeups(actor)) return;
+    const on = actor.trigger.on?.length ? actor.trigger.on : WAKING_NOTIFICATIONS;
     if (!on.includes(e.data.type as NotificationType)) return;
     // The actor who caused the event never wakes itself.
     if (e.actor === actor.id) return;
@@ -84,9 +166,14 @@ export class Runner {
     const p = this.pending.get(actor.id) ?? { notifications: [] };
     p.notifications.push(n);
     this.pending.set(actor.id, p);
-    if (this.active.has(actor.id)) return; // picked up when the current run ends
+    this.schedule(actor.id);
+  }
+
+  private schedule(actorId: string) {
+    const p = this.pending.get(actorId);
+    if (!p || this.active.has(actorId)) return; // picked up when the current run ends
     clearTimeout(p.timer);
-    p.timer = setTimeout(() => void this.flush(actor.id), this.opts.debounceMs);
+    p.timer = setTimeout(() => void this.flush(actorId), this.opts.debounceMs);
   }
 
   /** Run now for whatever is pending for this actor (exposed for tests and the "wake" button). */
@@ -102,12 +189,7 @@ export class Runner {
     } catch (err) {
       this.opts.log(`run for ${actorId} crashed: ${(err as Error).message}`);
     }
-    // Anything that arrived while we were running gets its own run.
-    const next = this.pending.get(actorId);
-    if (next?.notifications.length) {
-      clearTimeout(next.timer);
-      next.timer = setTimeout(() => void this.flush(actorId), this.opts.debounceMs);
-    }
+    if (!this.active.has(actorId)) this.schedule(actorId);
   }
 
   private guard(actor: Actor, task: Task | null): string | null {
@@ -126,6 +208,14 @@ export class Runner {
   private async execute(actor: Actor, notifications: Notification[]) {
     // Full config (including the webhook secret), which API responses never carry.
     const trigger = this.svc.triggerConfig(actor.id);
+    const where = trigger.where ?? "auto";
+    const remote = trigger.type !== "webhook" && where !== "desk" ? this.pickRemote(actor.id) : null;
+    if (!remote && where === "remote" && trigger.type !== "webhook") {
+      // Leave the notifications unread: the agent's runner delivers them when it reconnects.
+      this.opts.log(`holding wake-up for ${actor.id} until its runner is online`);
+      return;
+    }
+
     const primary = notifications.find((n) => n.task_id) ?? notifications[0];
     const task = primary.task_id ? this.safeTask(primary.task_id) : null;
     const project = task ? this.svc.project(task.project_id) : primary.project_id ? this.safeProject(primary.project_id) : null;
@@ -133,13 +223,14 @@ export class Runner {
     const blocked = this.guard(actor, task);
     if (blocked) {
       this.svc.createRun({ actor: actor.id, task_id: task?.id, notification_id: primary.id, trigger_type: trigger.type, status: "skipped", reason: blocked });
+      this.svc.markRead(actor.id, notifications.map((n) => n.id));
       this.opts.log(`skip ${actor.id}: ${blocked}`);
       return;
     }
 
     const cwd = trigger.cwd || project?.repo_path || "";
-    if (trigger.type !== "webhook" && (!cwd || !existsSync(cwd))) {
-      const reason = cwd ? `working directory ${cwd} does not exist` : `project ${project?.key ?? "?"} has no repo path (set it on the project or in the agent's trigger)`;
+    if (!remote && trigger.type !== "webhook" && (!cwd || !existsSync(cwd))) {
+      const reason = cwd ? `working directory ${cwd} does not exist on the desk's machine` : `project ${project?.key ?? "?"} has no repo path (set it on the project or in the agent's trigger)`;
       this.svc.createRun({ actor: actor.id, task_id: task?.id, notification_id: primary.id, trigger_type: trigger.type, status: "skipped", reason });
       return;
     }
@@ -147,52 +238,91 @@ export class Runner {
     const ttl = (trigger.timeout_minutes ?? 30) + 30;
     const token = this.svc.issueEphemeralToken(actor.id, ttl);
     const prompt = buildPrompt(actor, notifications, task, project, this.opts.deskUrl);
-    const run = this.svc.createRun({ actor: actor.id, task_id: task?.id, notification_id: primary.id, trigger_type: trigger.type, reason: notifications.map((n) => n.type).join(", ") });
+    const run = this.svc.createRun({
+      actor: actor.id,
+      task_id: task?.id,
+      notification_id: primary.id,
+      trigger_type: trigger.type,
+      reason: `${notifications.map((n) => n.type).join(", ")}${remote ? ` · on ${remote.name}` : ""}`,
+    });
     this.svc.touchActor(actor.id, "working", task ? `woken for ${task.key}` : "woken");
     this.svc.markRead(actor.id, notifications.map((n) => n.id));
-    this.opts.log(`waking ${actor.id} via ${trigger.type}${task ? ` for ${task.key}` : ""}`);
+    this.opts.log(`waking ${actor.id} via ${trigger.type}${remote ? ` on ${remote.name}` : ""}${task ? ` for ${task.key}` : ""}`);
 
-    let scratch: string | null = null;
+    if (remote) {
+      const order: WakeOrder = {
+        run_id: run.id,
+        actor: { id: actor.id, name: actor.name, role: actor.role },
+        trigger: { type: trigger.type, command: trigger.command, args: trigger.args, model: trigger.model, cwd: trigger.cwd, timeout_minutes: trigger.timeout_minutes },
+        prompt,
+        token,
+        token_ttl_minutes: ttl,
+        notification_id: primary.id,
+        task: task ? { key: task.key, title: task.title } : null,
+        project: project ? { key: project.key, name: project.name, repo_path: project.repo_path, repo_url: project.repo_url } : null,
+      };
+      // If the runner never reports back (machine slept, process killed), fail the run instead of blocking the agent forever.
+      const timer = setTimeout(() => {
+        if (!this.remoteRuns.has(run.id)) return;
+        this.finishRemote(run.id, actor.id, { status: "failed", exit_code: null, output: "", reason: `runner "${remote.name}" did not report back` });
+      }, ((trigger.timeout_minutes ?? 30) + 10) * 60_000);
+      timer.unref();
+      this.remoteRuns.set(run.id, { actor: actor.id, token, task, timer, conn: remote.id });
+      this.active.set(actor.id, { kill: () => {} });
+      if (!remote.send("wake", order)) {
+        this.finishRemote(run.id, actor.id, { status: "failed", exit_code: null, output: "", reason: `runner "${remote.name}" disconnected` });
+      }
+      return;
+    }
+
     let keepToken = false;
     try {
+      let result: RunResult;
       if (trigger.type === "webhook") {
         // The receiver usually acks and works asynchronously: leave the token valid until its TTL.
         keepToken = true;
-        const result = await this.webhook(trigger, { actor, notifications, task, project, prompt, token });
-        this.svc.finishRun(run.id, result);
-        this.reportFailure(actor, task, result);
+        result = await this.webhook(trigger, { actor, notifications, task, project, prompt, token });
       } else {
-        scratch = mkdtempSync(join(tmpdir(), "tunadesk-run-"));
-        const { command, args } = this.commandFor(trigger, { actor, task, prompt, token, cwd, notification: primary, scratch });
-        const result = await this.spawnRun(actor.id, command, args, {
-          cwd,
-          env: { TUNADESK_URL: this.opts.deskUrl, TUNADESK_TOKEN: token, TUNADESK_AGENT: actor.id, TUNADESK_TASK: task?.key ?? "" },
-          timeoutMs: (trigger.timeout_minutes ?? 30) * 60_000,
-        });
-        this.svc.finishRun(run.id, result);
-        this.reportFailure(actor, task, result);
+        result = await launchAgent(
+          trigger,
+          { deskUrl: this.opts.deskUrl, cliPath: this.opts.cliPath, actorId: actor.id, taskKey: task?.key ?? "", notificationId: primary.id, prompt, token, cwd },
+          (kill) => this.active.set(actor.id, { kill }),
+        );
       }
+      this.svc.finishRun(run.id, result);
+      this.reportFailure(actor.id, task, result);
     } catch (err) {
-      const failure = { status: "failed" as const, output: String((err as Error).message), reason: "runner error" };
+      const failure = { status: "failed" as const, exit_code: null, output: String((err as Error).message), reason: "runner error" };
       this.svc.finishRun(run.id, failure);
-      this.reportFailure(actor, task, failure);
+      this.reportFailure(actor.id, task, failure);
     } finally {
-      if (!keepToken) this.svc.revokeEphemeralToken(token);
-      if (scratch) rmSync(scratch, { recursive: true, force: true });
-      const now = this.svc.findActor(actor.id);
-      if (now?.status === "working" && now.status_note.startsWith("woken")) this.svc.touchActor(actor.id, "idle", "");
+      this.endRun(actor.id, token, !keepToken);
     }
   }
 
+  private pickRemote(actorId: string): RemoteConnection | null {
+    const conns = [...(this.remotes.get(actorId)?.values() ?? [])];
+    return conns.at(-1) ?? null;
+  }
+
+  private endRun(actorId: string, token: string, revoke: boolean) {
+    if (revoke) this.svc.revokeEphemeralToken(token);
+    this.active.delete(actorId);
+    const now = this.svc.findActor(actorId);
+    if (now?.status === "working" && now.status_note.startsWith("woken")) this.svc.touchActor(actorId, "idle", "");
+    this.schedule(actorId);
+  }
+
   /** Tell the human when a wake-up did not work, so failures never go unnoticed. */
-  private reportFailure(actor: Actor, task: Task | null, result: { status: string; reason?: string; output?: string }) {
+  private reportFailure(actorId: string, task: Task | null, result: { status: string; reason?: string; output?: string }) {
     if (result.status !== "failed") return;
+    const actor = this.svc.findActor(actorId);
     const tail = (result.output ?? "").trim().split("\n").slice(-3).join(" ").slice(0, 300);
     this.svc.notify(this.svc.settings().owner, "run_failed", {
-      sender: actor.id,
+      sender: actorId,
       task_id: task?.id ?? null,
       project_id: task?.project_id ?? null,
-      message: `Wake-up of @${actor.id} via ${actor.trigger.type} failed${result.reason ? ` (${result.reason})` : ""}${tail ? `: ${tail}` : ""}`,
+      message: `Wake-up of @${actorId} via ${actor?.trigger.type ?? "trigger"} failed${result.reason ? ` (${result.reason})` : ""}${tail ? `: ${tail}` : ""}`,
     });
   }
 
@@ -212,122 +342,10 @@ export class Runner {
     }
   }
 
-  /** Build argv for a CLI agent. Arguments are passed as an array — never through a shell. */
-  commandFor(
-    trigger: TriggerConfig,
-    ctx: { actor: Actor; task: Task | null; prompt: string; token: string; cwd: string; notification: Notification; scratch?: string },
-  ): { command: string; args: string[] } {
-    const extra = trigger.args ?? [];
-    const mcpUrl = `${this.opts.deskUrl}/mcp`;
-    switch (trigger.type) {
-      case "claude": {
-        const mcpConfig = JSON.stringify({ mcpServers: { tunadesk: { type: "http", url: mcpUrl, headers: { Authorization: `Bearer ${ctx.token}` } } } });
-        // A private file keeps the run token out of `ps` output.
-        let configArg = mcpConfig;
-        if (ctx.scratch) {
-          configArg = join(ctx.scratch, "mcp.json");
-          writeFileSync(configArg, mcpConfig, { mode: 0o600 });
-        }
-        const args = ["-p", ctx.prompt, "--mcp-config", configArg, "--output-format", "text"];
-        if (trigger.model) args.push("--model", trigger.model);
-        args.push(...(extra.length ? extra : ["--permission-mode", "acceptEdits", "--allowedTools", "mcp__tunadesk"]));
-        return { command: trigger.command || resolveBinary("claude", [join(homedir(), ".claude", "local", "claude")]), args };
-      }
-      case "codex": {
-        const node = process.execPath;
-        const toml = (v: string) => JSON.stringify(v); // TOML basic strings share JSON escaping for our inputs
-        const args = [
-          "exec",
-          "--skip-git-repo-check",
-          "-c",
-          `mcp_servers.tunadesk.command=${toml(node)}`,
-          "-c",
-          `mcp_servers.tunadesk.args=[${toml(this.opts.cliPath)}, "mcp"]`,
-          "-c",
-          `mcp_servers.tunadesk.env={ TUNADESK_URL = ${toml(this.opts.deskUrl)}, TUNADESK_TOKEN = ${toml(ctx.token)} }`,
-        ];
-        if (trigger.model) args.push("--model", trigger.model);
-        args.push(...(extra.length ? extra : ["--full-auto"]));
-        args.push(ctx.prompt);
-        return { command: trigger.command || resolveBinary("codex"), args };
-      }
-      case "grok": {
-        // grok-cli (github.com/superagent-ai/grok-cli): headless with --prompt; MCP is configured once with `grok mcp add`.
-        const args = ["--prompt", ctx.prompt, "--directory", ctx.cwd];
-        if (trigger.model) args.push("--model", trigger.model);
-        args.push(...extra);
-        return { command: trigger.command || resolveBinary("grok"), args };
-      }
-      case "command": {
-        if (!trigger.command) throw new Error("command trigger needs a command");
-        const vars: Record<string, string> = {
-          prompt: ctx.prompt,
-          task: ctx.task?.key ?? "",
-          actor: ctx.actor.id,
-          url: this.opts.deskUrl,
-          mcp_url: mcpUrl,
-          cwd: ctx.cwd,
-          notification: ctx.notification.id,
-        };
-        const args = (extra.length ? extra : ["{prompt}"]).map((a) => a.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : m)));
-        return { command: trigger.command, args };
-      }
-      default:
-        throw new Error(`unsupported trigger type ${trigger.type}`);
-    }
-  }
-
-  private spawnRun(
-    actorId: string,
-    command: string,
-    args: string[],
-    opts: { cwd: string; env: Record<string, string>; timeoutMs: number },
-  ): Promise<{ status: "succeeded" | "failed"; exit_code: number | null; output: string; reason?: string }> {
-    return new Promise((resolve) => {
-      let output = "";
-      const append = (chunk: Buffer) => {
-        output += chunk.toString();
-        if (output.length > OUTPUT_LIMIT * 2) output = output.slice(-OUTPUT_LIMIT);
-      };
-      let child;
-      try {
-        child = spawn(command, args, { cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdio: ["ignore", "pipe", "pipe"] });
-      } catch (err) {
-        resolve({ status: "failed", exit_code: null, output: String((err as Error).message), reason: "could not start" });
-        return;
-      }
-      let timedOut = false;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        child.kill("SIGTERM");
-        setTimeout(() => child.kill("SIGKILL"), 5000).unref();
-      }, opts.timeoutMs);
-      this.active.set(actorId, { kill: () => child.kill("SIGTERM") });
-      child.stdout?.on("data", append);
-      child.stderr?.on("data", append);
-      child.on("error", (err) => {
-        clearTimeout(timer);
-        this.active.delete(actorId);
-        const missing = (err as NodeJS.ErrnoException).code === "ENOENT";
-        resolve({ status: "failed", exit_code: null, output: output + String(err.message), reason: missing ? `${command} not found — install it or set the trigger command` : "spawn error" });
-      });
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        this.active.delete(actorId);
-        resolve({
-          status: code === 0 && !timedOut ? "succeeded" : "failed",
-          exit_code: code,
-          output: output.slice(-OUTPUT_LIMIT),
-          reason: timedOut ? `timed out after ${Math.round(opts.timeoutMs / 60000)} min` : undefined,
-        });
-      });
-    });
-  }
-
   private async webhook(
     trigger: TriggerConfig,
     ctx: { actor: Actor; notifications: Notification[]; task: Task | null; project: Project | null; prompt: string; token: string },
-  ): Promise<{ status: "succeeded" | "failed"; exit_code: number | null; output: string; reason?: string }> {
+  ): Promise<RunResult> {
     if (!trigger.url) return { status: "failed", exit_code: null, output: "", reason: "webhook trigger needs a url" };
     const payload = JSON.stringify({
       event: "tunadesk.wake",
@@ -351,42 +369,4 @@ export class Runner {
       return { status: "failed", exit_code: null, output: String((err as Error).message), reason: "webhook unreachable" };
     }
   }
-}
-
-export function buildPrompt(actor: Actor, notifications: Notification[], task: Task | null, project: Project | null, deskUrl: string): string {
-  const why = notifications
-    .map((n) => `- ${n.type}${n.task_key ? ` on ${n.task_key}` : ""} from @${n.sender ?? "system"}: ${n.message.replace(/\s+/g, " ").slice(0, 500)}`)
-    .join("\n");
-  return [
-    `You are @${actor.id} (${actor.name}), a ${actor.role} agent on Tunadesk — the shared task desk for this human's agents.`,
-    actor.description ? `Your standing instructions: ${actor.description}` : "",
-    "",
-    "You were woken up because:",
-    why,
-    "",
-    task ? `Focus task: ${task.key} — ${task.title} (project ${project?.key ?? task.project_key}).` : "",
-    "",
-    "How to work:",
-    "1. Call the tunadesk `briefing` tool, then `get_task` for the focus task to read the full thread.",
-    "2. `claim_task` before changing anything, then do the work in this repository.",
-    "3. Post short progress notes with `comment`; log non-obvious choices with `log_decision`.",
-    "4. Finish with `complete_task` (what changed + how verified + tokens_used) or `handoff_task` to the right teammate (e.g. to the tester when code is ready, with bug sub-tasks back to the developer when testing fails).",
-    "5. If you cannot proceed, `comment` why and `release_task`. Do not leave the task claimed.",
-    "",
-    `If the tunadesk MCP tools are not available, use the REST API at $TUNADESK_URL (${deskUrl}) with header "Authorization: Bearer $TUNADESK_TOKEN"; GET $TUNADESK_URL/llms.txt lists the endpoints.`,
-  ]
-    .filter((l) => l !== "")
-    .join("\n")
-    .replace("\nYou were woken", "\n\nYou were woken")
-    .replace("\nHow to work", "\n\nHow to work");
-}
-
-/** Find an executable on PATH (shell aliases are invisible to spawn), with fallbacks. */
-export function resolveBinary(name: string, fallbacks: string[] = []): string {
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    const candidate = join(dir, name);
-    if (dir && existsSync(candidate)) return candidate;
-  }
-  for (const f of fallbacks) if (existsSync(f)) return f;
-  return name;
 }

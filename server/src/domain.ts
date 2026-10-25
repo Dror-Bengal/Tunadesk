@@ -53,6 +53,11 @@ export interface TriggerConfig {
   timeout_minutes?: number;
   /** Skip non-critical work when the agent has no budget left. */
   respect_budget?: boolean;
+  /**
+   * Where CLI agents run: "desk" (the desk's own machine), "remote" (the agent's machine via
+   * `tunadesk runner`; wake-ups wait while it is offline) or "auto" (remote when connected, else desk).
+   */
+  where?: "auto" | "desk" | "remote";
 }
 
 export const PRIORITY_WEIGHT: Record<Priority, number> = { critical: 100, high: 60, medium: 30, low: 10 };
