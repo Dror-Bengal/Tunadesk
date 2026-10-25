@@ -240,6 +240,7 @@ export interface Overview {
   recent_decisions: Decision[];
   activity: Activity[];
   usage: Array<{ actor: string; day: string; tokens: number }>;
+  stale: Array<Task & { idle_hours: number }>;
 }
 
 export interface Me {

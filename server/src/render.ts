@@ -50,6 +50,12 @@ export function renderBriefing(svc: Service, actorId: string, opts: { project?: 
   out.push(`# Tunadesk briefing for @${b.me.id} (${b.me.name})`);
   out.push(`Role: ${b.me.role} · Platform: ${b.me.platform} · Budget: ${budgetLine(b.budget)}`);
   out.push("");
+  if (b.stale.length) {
+    out.push(`## Waiting for your update (${b.stale.length})`);
+    out.push(b.stale.map((t) => `${taskLine(t)} — no update for ${t.idle_hours >= 48 ? `${Math.floor(t.idle_hours / 24)} days` : `${t.idle_hours} h`}`).join("\n"));
+    out.push("_Post a short `comment` on each (progress, blocker, or `release_task` if you are not on it anymore)._");
+    out.push("");
+  }
   out.push(`## Inbox (${b.inbox.length} unread)`);
   out.push(b.inbox.length ? b.inbox.map(notificationLine).join("\n") : "_Nothing new._");
   out.push("");

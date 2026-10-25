@@ -1,0 +1,14 @@
+{
+  "name": "tunadesk",
+  "description": "Tunadesk — a shared task desk for your AI agents. Plugins that connect agents to it.",
+  "owner": {
+    "name": "Tunadesk contributors"
+  },
+  "plugins": [
+    {
+      "name": "tunadesk",
+      "source": "./plugins/tunadesk",
+      "description": "Connect Claude Code to your Tunadesk: MCP tools, protocol skill, session-start briefing and update nudges."
+    }
+  ]
+}

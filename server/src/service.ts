@@ -1966,6 +1966,16 @@ export class Service {
     return scored.sort((x, y) => y.score - x.score).slice(0, limit);
   }
 
+  /** Work that is supposedly moving but has had no update for a while — what nobody should have to chase by hand. */
+  staleTasks(opts: { assignee?: string; hours?: number } = {}): Array<Task & { idle_hours: number }> {
+    const hours = opts.hours ?? this.getSetting("stale_after_hours", 24);
+    const cutoff = Date.now() - hours * 3_600_000;
+    return this.listTasks({ status: ["in_progress", "review", "testing"], ...(opts.assignee ? { assignee: opts.assignee } : {}), limit: 2000 })
+      .filter((t) => t.assignee && Date.parse(t.updated_at) < cutoff)
+      .map((t) => ({ ...t, idle_hours: Math.floor((Date.now() - Date.parse(t.updated_at)) / 3_600_000) }))
+      .sort((a, b) => b.idle_hours - a.idle_hours);
+  }
+
   // -------------------------------------------------------------------------
   // overview + briefing
   // -------------------------------------------------------------------------
@@ -1993,6 +2003,7 @@ export class Service {
       done_this_week: doneThisWeek,
       in_progress: inProgress,
       recent_decisions: this.decisions({ limit: 8 }),
+      stale: this.staleTasks().slice(0, 20),
       activity: this.activity({ limit: 30 }).filter((a) => a.type !== "notification"),
       usage: this.usageSeries(14),
     };
@@ -2014,7 +2025,8 @@ export class Service {
       .filter((p) => !opts.project || p.key === opts.project.toUpperCase() || p.id === opts.project);
     const decisions = this.decisions({ project: opts.project, limit: 8 });
     const teammates = this.listActors().filter((x) => x.id !== a.id);
-    return { me: a, budget, inbox, my_tasks: myTasks, next, projects, decisions, teammates, focus: opts.project ? this.project(opts.project) : null };
+    const stale = this.staleTasks({ assignee: a.id });
+    return { me: a, budget, inbox, my_tasks: myTasks, next, projects, decisions, teammates, stale, focus: opts.project ? this.project(opts.project) : null };
   }
 
   private countRows(table: "actors" | "projects"): number {

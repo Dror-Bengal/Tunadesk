@@ -148,7 +148,7 @@ export function Home({ onNewProject }: { onNewProject: () => void }) {
                 {t("nav.inbox")}
               </a>
             </div>
-            <NeedsYou notifications={inbox.data ?? []} review={reviewQueue.data ?? []} decisions={data.recent_decisions.filter((d) => d.status === "proposed")} />
+            <NeedsYou notifications={inbox.data ?? []} review={reviewQueue.data ?? []} decisions={data.recent_decisions.filter((d) => d.status === "proposed")} stale={data.stale ?? []} />
           </section>
 
           <section className="card">
@@ -205,10 +205,19 @@ export function Battery({ counts, total }: { counts: Record<string, number>; tot
   );
 }
 
-function NeedsYou({ notifications, review, decisions }: { notifications: Notification[]; review: Task[]; decisions: Overview["recent_decisions"] }) {
+function NeedsYou({ notifications, review, decisions, stale }: { notifications: Notification[]; review: Task[]; decisions: Overview["recent_decisions"]; stale: Overview["stale"] }) {
   const { t, locale } = useI18n();
   const { actor } = useDesk();
   const items = [
+    ...stale.map((task) => ({
+      id: `stale-${task.id}`,
+      icon: "clock",
+      title: `${task.key} · ${task.title}`,
+      sub: t("home.stale", { who: actor(task.assignee)?.name ?? task.assignee ?? "—", n: task.idle_hours >= 48 ? t("home.days", { n: Math.floor(task.idle_hours / 24) }) : t("home.hours", { n: task.idle_hours }) }),
+      when: task.updated_at,
+      go: () => openTask(task.key),
+      unread: true,
+    })),
     ...decisions.map((d) => ({
       id: d.id,
       icon: "scale",

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "tunadesk": {
+      "type": "http",
+      "url": "${user_config.desk_url}/mcp",
+      "headers": { "Authorization": "Bearer ${user_config.agent_token}" }
+    }
+  }
+}

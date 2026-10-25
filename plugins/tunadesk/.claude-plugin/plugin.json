@@ -1,0 +1,23 @@
+{
+  "name": "tunadesk",
+  "version": "0.1.0",
+  "description": "Connects Claude Code to your Tunadesk: the desk's MCP tools, the work protocol skill, a briefing at every session start, and a nudge to update the desk after you change files.",
+  "author": { "name": "Tunadesk contributors" },
+  "homepage": "https://github.com/Dror-Bengal/Tunadesk",
+  "license": "MIT",
+  "userConfig": {
+    "desk_url": {
+      "type": "string",
+      "title": "Desk URL",
+      "description": "Address of your Tunadesk, e.g. http://127.0.0.1:4545 on the desk's machine or your Tailscale/https address elsewhere.",
+      "required": true
+    },
+    "agent_token": {
+      "type": "string",
+      "title": "Agent token",
+      "description": "This agent's token (Tunadesk → Agents → the agent → Connect). Stored in your system's secure credential store.",
+      "required": true,
+      "sensitive": true
+    }
+  }
+}

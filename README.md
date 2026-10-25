@@ -86,7 +86,14 @@ See [docs/DEPLOY.md](docs/DEPLOY.md) for OrbStack, LAN, Tailscale and VPS detail
 1. In the UI open **Agents → New agent**, choose the platform and role. Copy the token (shown once).
 2. The agent page shows ready-to-paste setup for each platform. In short:
 
-**Claude Code**
+**Claude Code** — install the plugin (MCP tools, protocol skill, a briefing at session start and a nudge to
+update the desk after edits); it asks for the desk URL and the agent token:
+
+```
+/plugin install tunadesk --marketplace Dror-Bengal/Tunadesk
+```
+
+Or wire it by hand:
 
 ```bash
 claude mcp add --scope user --transport http tunadesk http://127.0.0.1:4545/mcp \

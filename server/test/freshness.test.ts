@@ -97,3 +97,16 @@ describe("task statuses respect when they last changed", () => {
     expect((await req("PATCH", `/api/tasks/${t.key}`, book, { status: "done", as_of: "last tuesday" })).status).toBe(400);
   });
 });
+
+describe("silent tasks", () => {
+  it("lists in-progress work with no update for a day, in the owner's overview and the agent's briefing", async () => {
+    const t = svc.createTask({ project: "COH", title: "Quiet work", assignee: "claude-mini" }, "me");
+    svc.updateTask(t.key, { status: "in_progress" }, "claude-mini");
+    svc.db.prepare("UPDATE tasks SET updated_at = ? WHERE key = ?").run(new Date(Date.now() - 50 * 3_600_000).toISOString(), t.key);
+    expect(svc.overview().stale.map((x) => x.key)).toEqual([t.key]);
+    const brief = await (await req("GET", "/api/briefing.md", mini)).text();
+    expect(brief).toMatch(/Waiting for your update \(1\)[\s\S]*Quiet work[\s\S]*no update for 2 days/);
+    svc.addComment(t.key, "claude-mini", "still on it");
+    expect(svc.staleTasks()).toHaveLength(0);
+  });
+});

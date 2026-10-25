@@ -41,7 +41,7 @@ export function connectSnippets(opts: { deskUrl: string; agentId: string; token?
     {
       id: "claude-code",
       title: "Claude Code",
-      description: "Register the MCP server (user scope = every project), then install the Tunadesk skill so Claude follows the protocol.",
+      description: "Recommended: install the Tunadesk plugin — /plugin install tunadesk --marketplace Dror-Bengal/Tunadesk (desktop app: + → Plugins → Add marketplace) and enter this desk URL and token when asked. Or wire it by hand with these two commands:",
       language: "bash",
       code: [
         `claude mcp add --scope user --transport http tunadesk ${url}/mcp --header "Authorization: Bearer ${token}"`,
