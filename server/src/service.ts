@@ -18,6 +18,7 @@ import {
   type TaskType,
   type TriggerConfig,
 } from "./domain.js";
+import { normalizeName, normalizePath, normalizeRepoUrl, titleSimilarity } from "./dedupe.js";
 import {
   deriveKey,
   extractMentions,
@@ -575,6 +576,34 @@ export class Service {
     const p = this.findProject(ref);
     if (!p) throw notFound(`Project '${ref}'`);
     return p;
+  }
+
+  /** An existing project that is clearly the same one: same git remote, same folder, or same name. */
+  findDuplicateProject(input: { name: string; key?: string; repo_url?: string; repo_path?: string }): Project | null {
+    const url = normalizeRepoUrl(input.repo_url);
+    const path = normalizePath(input.repo_path);
+    const name = normalizeName(input.name);
+    const all = this.listProjects({ include_archived: true });
+    return (
+      (url && all.find((p) => normalizeRepoUrl(p.repo_url) === url)) ||
+      (path && all.find((p) => normalizePath(p.repo_path) === path)) ||
+      (input.key && all.find((p) => p.key === input.key!.toUpperCase().replace(/[^A-Z0-9]/g, ""))) ||
+      // Same name only counts when the remotes don't contradict it (two different repos may share a name).
+      all.find((p) => normalizeName(p.name) === name && !(url && p.repo_url && normalizeRepoUrl(p.repo_url) !== url)) ||
+      null
+    );
+  }
+
+  /** Open (or recently finished) tasks in the project whose titles look like the same work. */
+  similarTasks(projectRef: string, title: string, opts: { threshold?: number; limit?: number; exclude?: string } = {}): Array<{ task: Task; score: number }> {
+    const p = this.project(projectRef);
+    const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    return this.listTasks({ project: p.id, include_closed: true, limit: 2000 })
+      .filter((t) => t.id !== opts.exclude && t.status !== "canceled" && (OPEN_STATUSES.includes(t.status) || (t.completed_at ?? "") >= since))
+      .map((task) => ({ task, score: titleSimilarity(title, task.title) }))
+      .filter((m) => m.score >= (opts.threshold ?? 0.55))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, opts.limit ?? 5);
   }
 
   createProject(

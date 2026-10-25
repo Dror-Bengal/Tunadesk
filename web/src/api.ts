@@ -24,6 +24,8 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public code?: string,
+    public details?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -41,7 +43,10 @@ export async function api<T>(path: string, init: { method?: string; json?: unkno
   if (res.status === 401) unauthorizedHandler?.();
   const type = res.headers.get("content-type") ?? "";
   const payload = type.includes("json") ? await res.json() : await res.text();
-  if (!res.ok) throw new ApiError(res.status, (payload as { error?: { message?: string } })?.error?.message ?? String(payload));
+  if (!res.ok) {
+    const err = (payload as { error?: { message?: string; code?: string } & Record<string, unknown> })?.error;
+    throw new ApiError(res.status, err?.message ?? String(payload), err?.code, err);
+  }
   return payload as T;
 }
 

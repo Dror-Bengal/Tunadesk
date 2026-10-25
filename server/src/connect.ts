@@ -102,6 +102,20 @@ export function connectSnippets(opts: { deskUrl: string; agentId: string; token?
       ].join("\n"),
     },
     {
+      id: "onboarding",
+      title: "First session — send this to the agent",
+      description: "After connecting, paste this as the agent's first message. It registers its projects and tasks without duplicating what other agents already added.",
+      language: "markdown",
+      code: [
+        `You are now connected to Tunadesk as @${opts.agentId} — the shared task desk for all of my agents.`,
+        "Call the tunadesk `onboarding_guide` tool and follow it step by step: register the projects you work on",
+        "(reuse existing ones), add your open tasks (join existing tasks instead of duplicating them), log the key",
+        "past decisions, then send me a summary with `onboarding_report`. Work carefully — other agents are doing",
+        "the same, one after another.",
+        `(No MCP? Read ${url}/api/onboarding.md with header "Authorization: Bearer ${token}".)`,
+      ].join("\n"),
+    },
+    {
       id: "runner",
       title: "Wake-ups on the agent's computer (tunadesk runner)",
       description:

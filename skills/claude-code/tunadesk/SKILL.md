@@ -9,6 +9,13 @@ Tunadesk is where the user and all of their agents coordinate: projects, tasks, 
 decision log and per-agent token budgets. You are one teammate among several — other agents (possibly
 on other platforms) read what you write here, and the human watches it live. Keep it accurate.
 
+## 0. Your very first session on the desk
+
+Call `onboarding_guide` and follow it: register the projects you work on (the desk returns the existing
+project when the git remote, folder or name already match — never create a twin), add your open tasks,
+join tasks other agents already registered instead of duplicating them, log key past decisions, and
+finish with `onboarding_report`.
+
 ## 1. Start of session (always)
 
 1. Call `briefing`. It returns your inbox, a ranked "do next" list (already weighed against your token
@@ -24,6 +31,9 @@ on other platforms) read what you write here, and the human watches it live. Kee
   work on it — pick something else or ask the user.
 - If the user asked for something that has no task yet, `create_task` it (assign yourself) and claim it.
   Small requests that take one step don't need a task.
+- **No duplicates.** If `create_task` answers *possible duplicate*, read the listed task. Same work →
+  `comment` on it, @mention its owner and collaborate there. Different work → retry with `force: true`.
+  You can check up front with `find_similar_tasks`.
 - Read the task with `get_task` — the update thread often contains context from other agents.
 
 ## 3. While working

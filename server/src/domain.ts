@@ -26,7 +26,7 @@ export type DecisionStatus = (typeof DECISION_STATUSES)[number];
 export const TRIGGER_TYPES = ["none", "claude", "codex", "grok", "command", "webhook"] as const;
 export type TriggerType = (typeof TRIGGER_TYPES)[number];
 
-export const NOTIFICATION_TYPES = ["assigned", "mentioned", "handoff", "review_request", "completed", "comment", "loop_guard", "budget", "run_failed"] as const;
+export const NOTIFICATION_TYPES = ["assigned", "mentioned", "handoff", "review_request", "completed", "comment", "loop_guard", "budget", "run_failed", "onboarded"] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
 /** Notification types that wake an agent through its trigger. */
@@ -67,6 +67,8 @@ export class SwarmError extends Error {
     public status: number,
     public code: string,
     message: string,
+    /** Structured extras for clients (e.g. the tasks a new task may duplicate). */
+    public details?: Record<string, unknown>,
   ) {
     super(message);
   }

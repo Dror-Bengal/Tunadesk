@@ -197,6 +197,57 @@ export function renderDecisions(list: Decision[]): string {
     .join("\n\n");
 }
 
+/** First-session intake: how an agent brings its projects and tasks onto the desk without duplicating anyone. */
+export function renderOnboarding(svc: Service, actorId: string): string {
+  const me = svc.actor(actorId);
+  const projects = svc.listProjects({ include_archived: true });
+  const teammates = svc.listActors().filter((a) => a.id !== me.id);
+  const mine = svc.listTasks({ assignee: me.id, include_closed: true, limit: 500 });
+  const out: string[] = [
+    `# Tunadesk onboarding for @${me.id} (${me.name})`,
+    "",
+    "Goal: put everything you are working on onto the shared desk **once** — no duplicate projects, no duplicate tasks —",
+    "and connect your work to what other agents already registered. Work through the steps in order.",
+    "",
+    "## What is already on the desk",
+    projects.length
+      ? projects.map((p) => `- **${p.key}** ${p.name}${p.repo_url ? ` · ${p.repo_url}` : ""}${p.repo_path ? ` · ${p.repo_path}` : ""} — ${p.open_tasks} open / ${p.total_tasks} tasks`).join("\n")
+      : "_No projects yet — you are the first._",
+    "",
+    `Teammates: ${teammates.map((t) => `@${t.id} (${t.kind === "human" ? "human" : `${t.platform}, ${t.role}`})`).join(", ") || "none yet"}`,
+    `You already own ${mine.length} task(s) here.`,
+    "",
+    "## Step 1 — Projects",
+    "For every project you work on (look at your repos, your memory, your current context):",
+    "1. Find it in the list above. Match by git remote first (`git remote get-url origin`), then folder name, then name.",
+    "2. If it is missing, call `create_project` with `name`, `repo_url` (the git remote) and `repo_path` (your local checkout).",
+    "   The desk returns the existing project instead of creating a twin when the remote, folder or name match — that is expected.",
+    "3. If the project has no brief yet, write one with `update_project` (goal, stack, how to run/test, conventions). If it has one, only add what is missing.",
+    "",
+    "## Step 2 — Tasks",
+    "For each open piece of work you know about (TODOs you track, open issues you own, unfinished work in your context):",
+    "1. `create_task` in the right project, assigned to yourself (`assignee: \"" + me.id + "\"`), with a short description and realistic priority.",
+    "2. If the desk answers **possible_duplicate**, read the suggested tasks (`get_task`). If it is the same work:",
+    "   - do NOT create it again;",
+    "   - `comment` on the existing task with what you know or have done, and @mention its owner — this is now shared work;",
+    "   - if you are actively doing it and it is unowned, `claim_task` it.",
+    "   Only if it is genuinely different, call `create_task` again with `force: true`.",
+    "3. Link dependencies with `update_task` (`blocked_by`) when one task waits on another.",
+    "4. Do not import finished work, except as a one-line note in the project brief if it matters for context.",
+    "",
+    "## Step 3 — Decisions",
+    "Log the 2–5 most important past decisions per project with `log_decision` (context, decision, why, alternatives).",
+    "Check `list_decisions` first so you don't log one that is already there.",
+    "",
+    "## Step 4 — Report",
+    "Call `onboarding_report` with a short summary: projects found vs. created, tasks created, tasks you joined (with keys),",
+    "and anything the human should decide (e.g. two projects that might be one).",
+    "",
+    "_Be conservative: when unsure whether two things are the same, prefer commenting on the existing one and flagging it in your report._",
+  ];
+  return out.join("\n");
+}
+
 export function renderInbox(list: Notification[]): string {
   return list.length ? list.map(notificationLine).join("\n") : "_Inbox zero._";
 }

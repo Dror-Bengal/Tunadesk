@@ -4,11 +4,12 @@ import { useI18n } from "../i18n";
 import { navigate } from "../router";
 import { PALETTE } from "../format";
 import { PRIORITIES, type Priority, type Project } from "../types";
-import { Modal, useAction } from "./ui";
+import { Modal, useAction, useToast } from "./ui";
 
 export function NewProjectModal({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
   const run = useAction();
+  const toast = useToast();
   const [name, setName] = useState("");
   const [key, setKey] = useState("");
   const [description, setDescription] = useState("");
@@ -22,9 +23,9 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
     if (!name.trim()) return;
     setBusy(true);
     const p = await run(
-      () => post<Project>("/api/projects", { name: name.trim(), key: key.trim() || undefined, description, repo_path: repoPath.trim(), repo_url: repoUrl.trim(), priority, color }),
-      t("project.created"),
+      () => post<Project & { existing?: boolean }>("/api/projects", { name: name.trim(), key: key.trim() || undefined, description, repo_path: repoPath.trim(), repo_url: repoUrl.trim(), priority, color }),
     );
+    if (p) toast(p.existing ? t("project.existing", { key: p.key }) : t("project.created"));
     setBusy(false);
     if (p) {
       invalidate();

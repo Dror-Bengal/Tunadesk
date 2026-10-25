@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from "react";
-import { del, invalidate, patch, post, useApi } from "../api";
+import { ApiError, del, invalidate, patch, post, useApi } from "../api";
 import { useI18n, type MessageKey } from "../i18n";
 import { useDesk } from "../data";
 import { href, navigate, openTask, setQuery, useRoute } from "../router";
@@ -421,7 +421,7 @@ function AddRow({ project, group }: { project: Project; group: Group }) {
           if (e.key !== "Enter" || !value.trim()) return;
           const title = value.trim();
           setValue("");
-          await run(() => post("/api/tasks", { project: project.key, title, group: group.id }));
+          await run(() => post("/api/tasks", { project: project.key, title, group: group.id, force: true }));
           invalidate();
         }}
       />
@@ -455,11 +455,20 @@ export function NewTaskModal({ project, groups, parent, onClose }: { project: Pr
   const [due, setDue] = useState<string | null>(null);
   const [estimate, setEstimate] = useState(0);
 
-  const submit = async () => {
+  const [similar, setSimilar] = useState<Array<{ key: string; title: string; status: TaskStatus; assignee: string | null }>>([]);
+  const submit = async (force = false) => {
     if (!title.trim()) return;
-    const created = await run(() =>
-      post<Task>("/api/tasks", { project: project.key, title: title.trim(), description, assignee, status, priority, type, group: group || undefined, due_at: due, estimate_tokens: estimate, parent: parent?.key }),
-    );
+    const payload = { project: project.key, title: title.trim(), description, assignee, status, priority, type, group: group || undefined, due_at: due, estimate_tokens: estimate, parent: parent?.key, force };
+    let created: Task | undefined;
+    try {
+      created = await post<Task>("/api/tasks", payload);
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "possible_duplicate") {
+        setSimilar((e.details?.similar as typeof similar) ?? []);
+        return;
+      }
+      created = await run(() => Promise.reject(e));
+    }
     if (created) {
       invalidate();
       onClose();
@@ -476,8 +485,8 @@ export function NewTaskModal({ project, groups, parent, onClose }: { project: Pr
           <button className="btn" onClick={onClose}>
             {t("common.cancel")}
           </button>
-          <button className="btn primary" onClick={submit} disabled={!title.trim()}>
-            {t("common.create")}
+          <button className="btn primary" onClick={() => submit(similar.length > 0)} disabled={!title.trim()}>
+            {similar.length ? t("task.createAnyway") : t("common.create")}
           </button>
         </>
       }
@@ -485,12 +494,43 @@ export function NewTaskModal({ project, groups, parent, onClose }: { project: Pr
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          void submit();
+          void submit(similar.length > 0);
         }}
       >
+        {similar.length > 0 && (
+          <div className="callout warn" style={{ display: "block" }}>
+            <strong>{t("task.similarTitle")}</strong>
+            <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+              {similar.map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  className="btn small ghost"
+                  style={{ justifyContent: "flex-start" }}
+                  onClick={() => {
+                    onClose();
+                    openTask(m.key);
+                  }}
+                >
+                  <KeyChip>{m.key}</KeyChip> {m.title} · {t(`status.${m.status}` as MessageKey)}
+                  {m.assignee ? ` · @${m.assignee}` : ""}
+                </button>
+              ))}
+            </div>
+            <div style={{ marginTop: 6, color: "var(--text-2)" }}>{t("task.similarHint")}</div>
+          </div>
+        )}
         <label className="field">
           <span>{t("project.newTaskTitle")}</span>
-          <input className="input" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} />
+          <input
+            className="input"
+            autoFocus
+            value={title}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              setSimilar([]);
+            }}
+          />
         </label>
         <label className="field">
           <span>{t("task.description")}</span>

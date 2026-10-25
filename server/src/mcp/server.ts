@@ -8,12 +8,14 @@ export type DeskCall = (method: "GET" | "POST" | "PATCH" | "DELETE", path: strin
 export const MCP_INSTRUCTIONS = `Tunadesk is the shared project & task desk for every agent working with this human, across platforms (Claude Code, Codex, Grok, ...).
 
 Work protocol — follow it every session:
+0. FIRST SESSION EVER: call \`onboarding_guide\` and follow it to register your projects and tasks without duplicates.
 1. START: call \`briefing\` first. It shows your inbox (handoffs, mentions, assignments), ranked next tasks and the whole portfolio.
 2. CLAIM: before working on a task call \`claim_task\` so other agents don't collide with you. Re-claim to extend a long job.
 3. UPDATE: post short progress notes with \`comment\` (mention teammates with @id). Keep the project brief current with \`update_project\` when you learn something durable.
 4. DECIDE: whenever you make a non-obvious choice (architecture, library, scope cut, trade-off) call \`log_decision\` with the rationale.
 5. FINISH: call \`complete_task\` with a summary of what changed and how it was verified, or \`handoff_task\` to pass work to another agent (e.g. dev → tester, tester → dev with bug sub-tasks). Always include tokens_used when you know it.
 6. Never leave a task claimed when you stop. Never silently drop work: release it with a note instead.
+7. NO DUPLICATES: before creating a project or task, check what exists (\`portfolio\`, \`find_similar_tasks\`). If the desk says a task is a possible duplicate, join the existing one (comment + @mention) instead.
 Task keys look like PROJ-12. Agent ids look like @claude-dev.`;
 
 const text = (t: string, isError = false) => ({ content: [{ type: "text" as const, text: t }], ...(isError ? { isError: true } : {}) });
@@ -161,6 +163,40 @@ export function createMcpServer(call: DeskCall, version: string): McpServer {
       ),
   );
 
+  server.registerTool(
+    "onboarding_guide",
+    {
+      title: "Onboarding guide",
+      description: "First session on the desk: step-by-step guide to register your projects, tasks and decisions without duplicating other agents' work.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () => run("GET", "/api/onboarding.md"),
+  );
+
+  server.registerTool(
+    "onboarding_report",
+    {
+      title: "Report onboarding",
+      description: "Finish onboarding: summarise projects found/created, tasks created/joined (keys) and anything the human should decide.",
+      inputSchema: { summary: z.string() },
+    },
+    async ({ summary }) => run("POST", "/api/onboarding/report", { summary }, () => "Reported to the human. Welcome aboard."),
+  );
+
+  server.registerTool(
+    "find_similar_tasks",
+    {
+      title: "Find similar tasks",
+      description: "Before creating a task, check whether the same work already exists in the project (fuzzy title match, works in English and Hebrew).",
+      inputSchema: { project: z.string(), title: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ project, title }) =>
+      run("GET", `/api/tasks/similar${q({ project, title })}`, undefined, (list: any[]) =>
+        list.length ? list.map((t) => `${taskSummary(t)} — ${Math.round(t.score * 100)}% similar`).join("\n") : "No similar tasks."),
+  );
+
   // ------------------------------------------------------------------ write
   server.registerTool(
     "claim_task",
@@ -234,7 +270,7 @@ export function createMcpServer(call: DeskCall, version: string): McpServer {
     "create_task",
     {
       title: "Create a task",
-      description: "Add a task (or sub-task with parent) to a project.",
+      description: "Add a task (or sub-task with parent) to a project. The desk refuses likely duplicates and lists them — join those instead (comment + @mention), or pass force: true if the work is genuinely different.",
       inputSchema: {
         project: z.string(),
         title: z.string(),
@@ -249,6 +285,7 @@ export function createMcpServer(call: DeskCall, version: string): McpServer {
         estimate_tokens: z.number().int().min(0).optional(),
         blocked_by: z.array(z.string()).optional(),
         tags: z.array(z.string()).optional(),
+        force: z.boolean().optional().describe("Create even if similar tasks exist (only after checking they are different work)"),
       },
     },
     async (a) => run("POST", "/api/tasks", a, (t) => `Created ${taskSummary(t)}`),
@@ -338,7 +375,12 @@ export function createMcpServer(call: DeskCall, version: string): McpServer {
         priority: z.enum(PRIORITIES).optional(),
       },
     },
-    async (a) => run("POST", "/api/projects", a, (p) => `Created project ${p.key} · ${p.name}`),
+    async (a) =>
+      run("POST", "/api/projects", a, (p) =>
+        p.existing
+          ? `Project already on the desk: ${p.key} · ${p.name} (matched by remote/folder/name) — use it; nothing was created.`
+          : `Created project ${p.key} · ${p.name}`,
+      ),
   );
 
   server.registerTool(

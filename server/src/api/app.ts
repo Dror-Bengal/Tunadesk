@@ -24,7 +24,7 @@ import {
   type TaskType,
 } from "../domain.js";
 import { connectSnippets } from "../connect.js";
-import { renderBoard, renderBriefing, renderDecisions, renderInbox, renderPortfolio, renderTask, renderTaskList } from "../render.js";
+import { renderOnboarding, renderBoard, renderBriefing, renderDecisions, renderInbox, renderPortfolio, renderTask, renderTaskList } from "../render.js";
 
 export interface AppConfig {
   /** If set, required as Bearer token for human/admin access (the web UI). */
@@ -99,8 +99,10 @@ const projectCreate = z.object({
   brief: z.string().max(50_000).optional(),
   priority: z.enum(PRIORITIES).optional(),
   groups: z.array(z.string().min(1).max(60)).max(20).optional(),
+  /** Create even if a project with the same remote/folder/name exists. */
+  force: z.boolean().optional(),
 });
-const projectPatch = projectCreate.omit({ groups: true }).partial().extend({ status: z.enum(PROJECT_STATUSES).optional(), owner: z.string().nullable().optional() });
+const projectPatch = projectCreate.omit({ groups: true, force: true }).partial().extend({ status: z.enum(PROJECT_STATUSES).optional(), owner: z.string().nullable().optional() });
 
 const taskCreate = z.object({
   project: z.string(),
@@ -116,8 +118,10 @@ const taskCreate = z.object({
   due_at: z.string().nullable().optional(),
   estimate_tokens: z.number().int().min(0).optional(),
   blocked_by: z.array(z.string()).optional(),
+  /** Create even if similar tasks exist. */
+  force: z.boolean().optional(),
 });
-const taskPatch = taskCreate.omit({ project: true, blocked_by: true }).partial().extend({ position: z.number().optional() });
+const taskPatch = taskCreate.omit({ project: true, blocked_by: true, force: true }).partial().extend({ position: z.number().optional() });
 
 const decisionCreate = z.object({
   project: z.string().nullable().optional(),
@@ -164,7 +168,7 @@ export function createApp(svc: Service, config: AppConfig) {
   const app = new Hono<Env>();
 
   app.onError((err, c) => {
-    if (err instanceof SwarmError) return c.json({ error: { code: err.code, message: err.message } }, err.status as 400);
+    if (err instanceof SwarmError) return c.json({ error: { code: err.code, message: err.message, ...(err.details ?? {}) } }, err.status as 400);
     console.error(err);
     return c.json({ error: { code: "internal", message: "Internal error" } }, 500);
   });
@@ -252,6 +256,8 @@ export function createApp(svc: Service, config: AppConfig) {
         "- GET /api/portfolio.md — every project and agent at a glance",
         "- GET /api/projects/{KEY}/board.md — one project board with its brief",
         "- GET /api/tasks/{KEY-N}.md — one task with its updates",
+        "- GET /api/onboarding.md — first session: how to register your projects and tasks without duplicates",
+        "- GET /api/tasks/similar?project=KEY&title=… — check for existing work before creating a task",
         "",
         "## Write (JSON)",
         "- POST /api/tasks/{KEY-N}/claim {minutes?}",
@@ -259,7 +265,9 @@ export function createApp(svc: Service, config: AppConfig) {
         "- POST /api/tasks/{KEY-N}/handoff {to, message, status?, subtasks?, tokens_used?}",
         "- POST /api/tasks/{KEY-N}/complete {summary, tokens_used?, status?}",
         "- POST /api/decisions {project, task?, title, decision, rationale?}",
-        "- POST /api/tasks {project, title, ...}",
+        "- POST /api/tasks {project, title, ...} — 409 possible_duplicate lists similar tasks; resend with force: true only if different",
+        "- POST /api/projects {name, repo_url, repo_path} — returns the existing project (existing: true) when it is already registered",
+        "- POST /api/onboarding/report {summary}",
         "",
         "MCP endpoint: POST /mcp (Streamable HTTP, same bearer token).",
       ].join("\n"),
@@ -283,6 +291,13 @@ export function createApp(svc: Service, config: AppConfig) {
   api.get("/overview", (c) => c.json(svc.overview()));
   api.get("/portfolio.md", (c) => md(c, renderPortfolio(svc)));
   api.get("/briefing", (c) => c.json(svc.briefing(subject(c), { project: c.req.query("project") })));
+  api.get("/onboarding.md", (c) => md(c, renderOnboarding(svc, subject(c))));
+  api.post("/onboarding/report", async (c) => {
+    const b = await body(c, z.object({ summary: z.string().min(1).max(20_000) }));
+    const me = c.get("actor");
+    svc.notify(svc.settings().owner, "onboarded", { sender: me.id, message: b.summary });
+    return c.json({ ok: true });
+  });
   api.get("/briefing.md", (c) => md(c, renderBriefing(svc, subject(c), { project: c.req.query("project") })));
 
   // settings
@@ -364,7 +379,10 @@ export function createApp(svc: Service, config: AppConfig) {
   // projects
   api.get("/projects", (c) => c.json(svc.listProjects({ include_archived: c.req.query("archived") === "1" })));
   api.post("/projects", async (c) => {
-    const b = await body(c, projectCreate);
+    const { force, ...b } = await body(c, projectCreate);
+    // Several agents describe the same repo: hand back the existing project instead of a twin.
+    const existing = force ? null : svc.findDuplicateProject(b);
+    if (existing) return c.json({ ...existing, existing: true }, 200);
     return c.json(svc.createProject(b, c.get("actor").id), 201);
   });
   api.get("/projects/:ref", (c) => {
@@ -416,8 +434,26 @@ export function createApp(svc: Service, config: AppConfig) {
     return c.json(tasks);
   });
   api.post("/tasks", async (c) => {
-    const b = await body(c, taskCreate);
+    const { force, ...b } = await body(c, taskCreate);
+    if (!force && !b.parent) {
+      const similar = svc.similarTasks(b.project, b.title);
+      if (similar.length) {
+        const list = similar.map((m) => `${m.task.key} "${m.task.title}" (${m.task.status}${m.task.assignee ? `, @${m.task.assignee}` : ""}, ${Math.round(m.score * 100)}% similar)`);
+        throw new SwarmError(
+          409,
+          "possible_duplicate",
+          `Possible duplicate of ${list.join("; ")}. If it is the same work, join it instead: comment on that task and @mention its owner. If it is different, create it again with force: true.`,
+          { similar: similar.map((m) => ({ key: m.task.key, title: m.task.title, status: m.task.status, assignee: m.task.assignee, score: m.score })) },
+        );
+      }
+    }
     return c.json(svc.createTask(b, c.get("actor").id), 201);
+  });
+  api.get("/tasks/similar", (c) => {
+    const project = c.req.query("project");
+    const title = c.req.query("title");
+    if (!project || !title) throw badRequest("project and title are required");
+    return c.json(svc.similarTasks(project, title, { threshold: Number(c.req.query("threshold") ?? 0.4) }).map((m) => ({ ...m.task, score: m.score })));
   });
   api.get("/tasks/:ref{.+\\.md}", (c) => md(c, renderTask(svc, c.req.param("ref").replace(/\.md$/, ""))));
   api.get("/tasks/:ref", (c) => {
