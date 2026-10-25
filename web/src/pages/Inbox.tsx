@@ -40,7 +40,7 @@ export function InboxPage() {
       </div>
       <div className="card">
         {!data?.length ? (
-          <Empty icon="📭">{t("inbox.empty")}</Empty>
+          <Empty>{t("inbox.empty")}</Empty>
         ) : (
           <div className="list">
             {data.map((n) => {
@@ -54,7 +54,7 @@ export function InboxPage() {
                     if (n.task_key) openTask(n.task_key);
                   }}
                 >
-                  {sender ? <Avatar actor={sender} size={32} /> : <span style={{ fontSize: 22, width: 32, textAlign: "center" }}>{n.type === "loop_guard" ? "🔁" : n.type === "budget" ? "💸" : "🐟"}</span>}
+                  {sender ? <Avatar actor={sender} size={32} /> : <span className="needs-icon" style={{ width: 32, height: 32 }}><Icon name={n.type === "loop_guard" ? "loop" : n.type === "budget" || n.type === "run_failed" ? "alert" : "bell"} size={15} /></span>}
                   <div className="body">
                     <div className="title">
                       {sender?.name ?? "Tunadesk"} <span style={{ fontWeight: 400, color: "var(--text-2)" }}>{t(`notif.${n.type}` as MessageKey)}</span>{" "}
@@ -97,13 +97,13 @@ export function MyWorkPage() {
       </div>
       {!tasks.length && (
         <div className="card">
-          <Empty icon="🏖️">{t("mywork.empty")}</Empty>
+          <Empty>{t("mywork.empty")}</Empty>
         </div>
       )}
       {[...byProject.entries()].map(([key, list]) => {
         const p = project(key);
         return (
-          <section key={key} className="group" style={{ ["--gc" as string]: p?.color ?? "#579bfc" }}>
+          <section key={key} className="group" style={{ ["--gc" as string]: p?.color ?? "#44546a" }}>
             <div className="group-head">
               <h3 style={{ cursor: "pointer" }} onClick={() => navigate(`/p/${key}`)}>
                 {p?.name ?? key}

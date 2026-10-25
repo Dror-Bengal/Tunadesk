@@ -222,12 +222,12 @@ export type HiveEvent = Activity;
 // ---------------------------------------------------------------------------
 
 const DEFAULT_GROUPS: Array<[string, string]> = [
-  ["Now", "#579bfc"],
-  ["Next", "#a25ddc"],
-  ["Later", "#c4c4c4"],
+  ["Now", "#a8661c"],
+  ["Next", "#6b4a8a"],
+  ["Later", "#5f5a52"],
 ];
 
-const PROJECT_COLORS = ["#579bfc", "#00c875", "#a25ddc", "#fdab3d", "#e2445c", "#0086c0", "#ff642e", "#037f4c", "#bb3354", "#784bd1"];
+const PROJECT_COLORS = ["#2f6b4f", "#8a5a1c", "#6b4a8a", "#9e2f3a", "#44546a", "#a8661c", "#2d6a6a", "#7a3b5c", "#5c6b2f", "#4e4a8c"];
 
 type Row = Record<string, unknown>;
 

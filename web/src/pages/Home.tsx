@@ -36,13 +36,13 @@ export function Home({ onNewProject }: { onNewProject: () => void }) {
         <Kpi color={STATUS_COLOR.in_progress} value={s.in_progress ?? 0} label={t("home.inProgress")} />
         <Kpi color={STATUS_COLOR.review} value={(s.review ?? 0) + (s.testing ?? 0)} label={t("home.inReview")} />
         <Kpi color={STATUS_COLOR.blocked} value={s.blocked ?? 0} label={t("home.blocked")} />
-        <Kpi color="#bb3354" value={data.overdue} label={t("home.overdue")} />
+        <Kpi color="#7a3b5c" value={data.overdue} label={t("home.overdue")} />
         <Kpi color={STATUS_COLOR.done} value={data.done_this_week} label={t("home.doneWeek")} />
       </div>
 
       {data.projects.length === 0 ? (
         <div className="card" style={{ padding: 28, marginBottom: 16 }}>
-          <h2 style={{ marginTop: 0 }}>🐟 {t("home.welcomeTitle")}</h2>
+          <h2 style={{ marginTop: 0 }}>{t("home.welcomeTitle")}</h2>
           <p style={{ color: "var(--text-2)" }}>{t("home.welcomeBody")}</p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="btn primary" onClick={onNewProject}>
@@ -77,7 +77,7 @@ export function Home({ onNewProject }: { onNewProject: () => void }) {
                         <div className="meta">
                           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                             <strong>{a.name}</strong>
-                            <Pill color={AGENT_STATUS_COLOR[a.status] ?? "#c4c4c4"} outline>
+                            <Pill color={AGENT_STATUS_COLOR[a.status] ?? "#6e675c"} outline>
                               {t(`astatus.${a.status}` as MessageKey)}
                             </Pill>
                           </div>
@@ -89,7 +89,7 @@ export function Home({ onNewProject }: { onNewProject: () => void }) {
                   })}
                 </div>
               ) : (
-                <Empty icon="🤖">
+                <Empty>
                   <a href={href("/agents")}>{t("agents.new")}</a>
                 </Empty>
               )}
@@ -178,7 +178,7 @@ export function Home({ onNewProject }: { onNewProject: () => void }) {
                   </div>
                 </a>
               ))}
-              {!data.recent_decisions.length && <Empty icon="⚖️">{t("decisions.empty")}</Empty>}
+              {!data.recent_decisions.length && <Empty>{t("decisions.empty")}</Empty>}
             </div>
           </section>
         </div>
@@ -211,7 +211,7 @@ function NeedsYou({ notifications, review, decisions }: { notifications: Notific
   const items = [
     ...decisions.map((d) => ({
       id: d.id,
-      icon: "⚖️",
+      icon: "scale",
       title: d.title,
       sub: `${t("home.proposed")} · ${d.ref}`,
       when: d.created_at,
@@ -220,7 +220,7 @@ function NeedsYou({ notifications, review, decisions }: { notifications: Notific
     })),
     ...review.map((task) => ({
       id: task.id,
-      icon: task.status === "blocked" ? "⛔" : "👀",
+      icon: task.status === "blocked" ? "alert" : "eye",
       title: `${task.key} · ${task.title}`,
       sub: task.status === "blocked" ? t("status.blocked") : t("home.review"),
       when: task.updated_at,
@@ -229,7 +229,7 @@ function NeedsYou({ notifications, review, decisions }: { notifications: Notific
     })),
     ...notifications.filter((n) => !n.task_id || !review.some((r) => r.id === n.task_id)).map((n) => ({
       id: n.id,
-      icon: n.type === "loop_guard" ? "🔁" : n.type === "budget" ? "💸" : n.type === "run_failed" ? "⚠️" : "🔔",
+      icon: n.type === "loop_guard" ? "loop" : n.type === "run_failed" || n.type === "budget" ? "alert" : "bell",
       title: `${actor(n.sender)?.name ?? n.sender ?? "Tunadesk"} ${t(`notif.${n.type}` as MessageKey)}${n.task_key ? ` · ${n.task_key}` : ""}`,
       sub: n.message,
       when: n.created_at,
@@ -237,12 +237,12 @@ function NeedsYou({ notifications, review, decisions }: { notifications: Notific
       unread: !n.read_at,
     })),
   ].slice(0, 12);
-  if (!items.length) return <Empty icon="🌊">{t("home.needsYouEmpty")}</Empty>;
+  if (!items.length) return <Empty>{t("home.needsYouEmpty")}</Empty>;
   return (
     <div className="list">
       {items.map((i) => (
         <button key={i.id} className={`list-item${i.unread ? " unread" : ""}`} onClick={i.go}>
-          <span style={{ fontSize: 18 }}>{i.icon}</span>
+          <span className="needs-icon"><Icon name={i.icon} size={15} /></span>
           <div className="body">
             <div className="title">{i.title}</div>
             <div className="sub">{i.sub}</div>
@@ -271,7 +271,7 @@ export function ActivityFeed({ initial, limit = 25 }: { initial: Activity[]; lim
     [],
   );
   const items = initial.slice(0, limit);
-  if (!items.length) return <Empty icon="🌊">—</Empty>;
+  if (!items.length) return <Empty>—</Empty>;
   return (
     <div className="list" style={{ paddingBottom: 8 }}>
       {items.map((a) => (
@@ -303,7 +303,7 @@ function UsageChart({ usage }: { usage: Overview["usage"] }) {
     const totals = days.map((d) => usage.filter((u) => u.day === d).reduce((s, u) => s + u.tokens, 0));
     return { days, actors, max: Math.max(1, ...totals) };
   }, [usage]);
-  if (!usage.length) return <Empty icon="📊">—</Empty>;
+  if (!usage.length) return <Empty>—</Empty>;
   const W = 640;
   const H = 180;
   const pad = { l: 40, r: 8, t: 8, b: 22 };
@@ -331,7 +331,7 @@ function UsageChart({ usage }: { usage: Overview["usage"] }) {
                 acc += v;
                 const y1 = y(acc);
                 return (
-                  <rect key={a} x={pad.l + i * bw + 3} width={bw - 6} y={y1} height={Math.max(0, y0 - y1)} rx={2} fill={actor(a)?.color ?? "#999"}>
+                  <rect key={a} x={pad.l + i * bw + 3} width={bw - 6} y={y1} height={Math.max(0, y0 - y1)} rx={2} fill={actor(a)?.color ?? "#6e675c"}>
                     <title>{`${actor(a)?.name ?? a} · ${d}: ${fmtTokens(v)}`}</title>
                   </rect>
                 );
@@ -348,7 +348,7 @@ function UsageChart({ usage }: { usage: Overview["usage"] }) {
       <div className="legend">
         {actors.map((a) => (
           <span key={a}>
-            <i style={{ background: actor(a)?.color ?? "#999" }} />
+            <i style={{ background: actor(a)?.color ?? "#6e675c" }} />
             {actor(a)?.name ?? a}
           </span>
         ))}

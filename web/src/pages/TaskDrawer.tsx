@@ -32,7 +32,7 @@ export function TaskDrawer({ taskKey }: { taskKey: string }) {
     return (
       <Drawer onClose={closeTask} label={taskKey}>
         <div className="drawer-body" style={{ paddingTop: 20 }}>
-          <Empty icon="🔍">{t("task.notFound")}</Empty>
+          <Empty>{t("task.notFound")}</Empty>
         </div>
       </Drawer>
     );
@@ -121,7 +121,7 @@ export function TaskDrawer({ taskKey }: { taskKey: string }) {
         )}
         {task.status === "blocked" && task.handoff_count > 0 && (
           <div className="callout warn">
-            <span>🔁</span>
+            <Icon name="loop" size={15} />
             <span>{t("task.handoffs", { n: task.handoff_count })}</span>
           </div>
         )}
@@ -275,7 +275,7 @@ export function TaskDrawer({ taskKey }: { taskKey: string }) {
 
         {tab === "subtasks" && (
           <>
-            {data.subtasks.length === 0 && <Empty icon="🧩">{t("common.empty")}</Empty>}
+            {data.subtasks.length === 0 && <Empty>{t("common.empty")}</Empty>}
             <div className="list" style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", marginBottom: 12 }}>
               {data.subtasks.map((s) => (
                 <div key={s.id} className="list-item" style={{ alignItems: "center", cursor: "default" }}>
@@ -406,14 +406,14 @@ function Updates({ detail }: { detail: TaskDetail }) {
         </div>
       )}
       <Composer taskKey={task.key} />
-      {comments.length === 0 && <Empty icon="💬">{t("task.noUpdates")}</Empty>}
+      {comments.length === 0 && <Empty>{t("task.noUpdates")}</Empty>}
       {[...comments].reverse().map((c) => (
         <div key={c.id} className={`update ${c.kind}`}>
           <div className="update-head">
             <Avatar actor={actor(c.author)} size={24} presence={actor(c.author)?.kind === "agent"} />
             <strong>{actor(c.author)?.name ?? c.author ?? "Tunadesk"}</strong>
             {c.kind !== "comment" && (
-              <Pill color={c.kind === "handoff" ? "#2f5bea" : c.kind === "report" ? STATUS_COLOR.done : "#999"} outline>
+              <Pill color={c.kind === "handoff" ? "#44546a" : c.kind === "report" ? STATUS_COLOR.done : "#6e675c"} outline>
                 {t(`task.kind.${c.kind}` as MessageKey)}
               </Pill>
             )}

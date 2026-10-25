@@ -66,13 +66,13 @@ export function PriorityCell({ value, onChange }: { value: Priority; onChange: (
   return <ColorChoiceCell name="Priority" value={value} options={PRIORITIES} colors={PRIORITY_COLOR} labelKey={(v) => `priority.${v}` as MessageKey} onChange={onChange} />;
 }
 
-const TYPE_ICON: Record<TaskType, string> = { feature: "✨", bug: "🐞", test: "🧪", review: "👀", chore: "🧹", research: "🔎", docs: "📝" };
-export const typeIcon = (t: TaskType) => TYPE_ICON[t] ?? "•";
+const TYPE_ICON: Record<TaskType, string> = { feature: "feature", bug: "bug", test: "flask", review: "eye", chore: "wrench", research: "search", docs: "doc" };
+export const typeIcon = (t: TaskType) => <Icon name={TYPE_ICON[t] ?? "more"} size={14} className="type-icon" />;
 
 export function TypeCell({ value, onChange }: { value: TaskType; onChange: (v: TaskType) => void }) {
   const { t } = useI18n();
   return (
-    <PopoverButton className="cell-btn" label={`Type: ${t(`type.${value}` as MessageKey)}`} button={<span>{TYPE_ICON[value]} {t(`type.${value}` as MessageKey)}</span>} width={170}>
+    <PopoverButton className="cell-btn" label={`Type: ${t(`type.${value}` as MessageKey)}`} button={<span className="type-label">{typeIcon(value)} {t(`type.${value}` as MessageKey)}</span>} width={170}>
       {(close) => (
         <div className="menu">
           {TASK_TYPES.map((o) => (
@@ -85,7 +85,7 @@ export function TypeCell({ value, onChange }: { value: TaskType; onChange: (v: T
                 if (o !== value) onChange(o);
               }}
             >
-              <span>{TYPE_ICON[o]}</span> {t(`type.${o}` as MessageKey)}
+              {typeIcon(o)} {t(`type.${o}` as MessageKey)}
             </button>
           ))}
         </div>

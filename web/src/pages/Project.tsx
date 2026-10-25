@@ -32,7 +32,7 @@ export function ProjectPage({ projectKey, view }: { projectKey: string; view: st
   const [settings, setSettings] = useState(false);
   const desk = useDesk();
 
-  if (detail.error) return <div className="page"><Empty icon="🧭">{t("project.notFound")}</Empty></div>;
+  if (detail.error) return <div className="page"><Empty>{t("project.notFound")}</Empty></div>;
   if (!detail.data) return <div className="page">{t("common.loading")}</div>;
   const { project, groups } = detail.data;
   const all = tasks.data ?? [];
@@ -161,7 +161,7 @@ function TableView({ project, groups, tasks }: { project: Project; groups: Group
       {ungrouped.length > 0 && (
         <GroupTable
           project={project}
-          group={{ id: "", project_id: project.id, name: "—", color: "#c4c4c4", position: 999, collapsed: false }}
+          group={{ id: "", project_id: project.id, name: "—", color: "#6e675c", position: 999, collapsed: false }}
           tasks={ungrouped}
           childrenOf={childrenOf}
           expanded={expanded}
@@ -371,7 +371,7 @@ function TaskRow({ task, sub, expanded, onToggle }: { task: Task; sub?: boolean;
               <Icon name="lock" size={13} />
             </span>
           )}
-          {task.blocked_by.length > 0 && <span title={`${t("task.blockedBy")} ${task.blocked_by.join(", ")}`}>⛔</span>}
+          {task.blocked_by.length > 0 && <span title={`${t("task.blockedBy")} ${task.blocked_by.join(", ")}`} style={{ color: "var(--danger)", display: "inline-flex" }}><Icon name="alert" size={13} /></span>}
           {task.comment_count > 0 && (
             <span title={t("task.updates")} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
               <Icon name="comment" size={13} />
@@ -610,7 +610,7 @@ function KanbanView({ tasks }: { tasks: Task[] }) {
                   </div>
                   <div className="title">{task.title}</div>
                   <div className="bottom">
-                    {task.due_at && <span className={`due ${state ?? ""}`}>📅 {fmtDate(task.due_at, locale)}</span>}
+                    {task.due_at && <span className={`due ${state ?? ""}`} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="clock" size={12} /> {fmtDate(task.due_at, locale)}</span>}
                     {task.subtask_count > 0 && (
                       <span>
                         <Icon name="sub" size={12} /> {task.subtasks_done}/{task.subtask_count}
@@ -621,7 +621,7 @@ function KanbanView({ tasks }: { tasks: Task[] }) {
                         <Icon name="comment" size={12} /> {task.comment_count}
                       </span>
                     )}
-                    {task.blocked_by.length > 0 && <span>⛔ {task.blocked_by.join(", ")}</span>}
+                    {task.blocked_by.length > 0 && <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: "var(--danger)" }}><Icon name="alert" size={12} /> {task.blocked_by.join(", ")}</span>}
                     <Avatar actor={actor(task.assignee)} size={24} presence={actor(task.assignee)?.kind === "agent"} />
                   </div>
                 </div>
@@ -684,7 +684,7 @@ function BriefView({ project }: { project: Project }) {
         ) : project.brief ? (
           <Markdown text={project.brief} />
         ) : (
-          <Empty icon="📓">{t("project.briefEmpty")}</Empty>
+          <Empty>{t("project.briefEmpty")}</Empty>
         )}
       </div>
     </div>

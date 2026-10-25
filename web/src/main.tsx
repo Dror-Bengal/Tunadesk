@@ -13,6 +13,8 @@ try {
   /* storage unavailable */
 }
 
+const urlTheme = new URLSearchParams(window.location.search).get("theme");
+if (urlTheme === "light" || urlTheme === "dark") document.documentElement.dataset.theme = urlTheme;
 if (new URLSearchParams(window.location.search).has("snapshot")) document.documentElement.classList.add("snapshot");
 
 createRoot(document.getElementById("root")!).render(

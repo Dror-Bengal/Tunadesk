@@ -29,7 +29,7 @@ export function AgentsPage({ agentId }: { agentId?: string }) {
       </div>
       {agents.length === 0 && (
         <div className="card" style={{ marginBottom: 16 }}>
-          <Empty icon="🤖">
+          <Empty>
             <button className="btn primary" onClick={() => setCreating(true)}>
               {t("agents.new")}
             </button>
@@ -52,15 +52,15 @@ export function AgentsPage({ agentId }: { agentId?: string }) {
               <Pill color={a.color} outline>
                 {PLATFORM_LABEL[a.platform] ?? a.platform}
               </Pill>
-              <Pill color="#676879" outline>
+              <Pill color="#57534c" outline>
                 {t(`role.${a.role}` as MessageKey)}
               </Pill>
-              <Pill color={AGENT_STATUS_COLOR[a.status] ?? "#c4c4c4"} outline>
+              <Pill color={AGENT_STATUS_COLOR[a.status] ?? "#6e675c"} outline>
                 {t(`astatus.${a.status}` as MessageKey)}
               </Pill>
               {a.trigger.enabled && a.trigger.type !== "none" && (
-                <Pill color="#2f5bea" outline>
-                  ⚡ {a.trigger.type}
+                <Pill color="#44546a" outline>
+                  <Icon name="bolt" size={12} /> {a.trigger.type}
                 </Pill>
               )}
             </div>
@@ -91,20 +91,20 @@ export function AgentsPage({ agentId }: { agentId?: string }) {
 }
 
 const PLATFORM_DEFAULTS: Record<string, { emoji: string; trigger: TriggerConfig["type"]; color: string }> = {
-  "claude-code": { emoji: "🧠", trigger: "claude", color: "#ff7a45" },
-  codex: { emoji: "🧪", trigger: "codex", color: "#00c875" },
-  grok: { emoji: "🔭", trigger: "grok", color: "#a25ddc" },
-  chatgpt: { emoji: "💬", trigger: "webhook", color: "#0086c0" },
-  cursor: { emoji: "🖱️", trigger: "none", color: "#579bfc" },
-  gemini: { emoji: "✨", trigger: "command", color: "#fdab3d" },
-  other: { emoji: "🤖", trigger: "none", color: "#784bd1" },
-  human: { emoji: "🧑", trigger: "none", color: "#ff7575" },
+  "claude-code": { emoji: "🧠", trigger: "claude", color: "#8c4a2f" },
+  codex: { emoji: "🧪", trigger: "codex", color: "#2f6b4f" },
+  grok: { emoji: "🔭", trigger: "grok", color: "#6b4a8a" },
+  chatgpt: { emoji: "💬", trigger: "webhook", color: "#2d6a6a" },
+  cursor: { emoji: "🖱️", trigger: "none", color: "#44546a" },
+  gemini: { emoji: "✨", trigger: "command", color: "#a8661c" },
+  other: { emoji: "🤖", trigger: "none", color: "#4e4a8c" },
+  human: { emoji: "🧑", trigger: "none", color: "#8c4a2f" },
 };
 
 function NewAgentModal({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
   const run = useAction();
-  const [f, setF] = useState({ name: "", id: "", platform: "claude-code", role: "developer", emoji: "🧠", color: "#ff7a45", token_budget: 0, budget_period: "day", description: "" });
+  const [f, setF] = useState({ name: "", id: "", platform: "claude-code", role: "developer", emoji: "🧠", color: "#8c4a2f", token_budget: 0, budget_period: "day", description: "" });
   const [created, setCreated] = useState<{ actor: Actor; token: string } | null>(null);
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((x) => ({ ...x, [k]: v }));
 
@@ -281,7 +281,7 @@ function AgentDetailPage({ id }: { id: string }) {
   const [tab, setTab] = useState<AgentTab>("overview");
   const [token, setToken] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  if (error) return <div className="page"><Empty icon="🤖">{error}</Empty></div>;
+  if (error) return <div className="page"><Empty>{error}</Empty></div>;
   if (!data) return <div className="page">{t("common.loading")}</div>;
   const a = data.actor;
   return (
@@ -298,10 +298,10 @@ function AgentDetailPage({ id }: { id: string }) {
             <Pill color={a.color} outline>
               {PLATFORM_LABEL[a.platform] ?? a.platform}
             </Pill>
-            <Pill color="#676879" outline>
+            <Pill color="#57534c" outline>
               {t(`role.${a.role}` as MessageKey)}
             </Pill>
-            <Pill color={AGENT_STATUS_COLOR[a.status] ?? "#c4c4c4"}>{t(`astatus.${a.status}` as MessageKey)}</Pill>
+            <Pill color={AGENT_STATUS_COLOR[a.status] ?? "#6e675c"}>{t(`astatus.${a.status}` as MessageKey)}</Pill>
             <span style={{ color: "var(--text-3)", fontSize: 13 }}>{a.status_note || t("agents.lastSeen", { when: a.last_seen_at ? relTime(a.last_seen_at, locale) : t("agents.never") })}</span>
           </p>
         </div>
@@ -344,7 +344,7 @@ function AgentDetailPage({ id }: { id: string }) {
                 <h2>{t("agents.queue")}</h2>
               </div>
               <div className="card-body">
-                {data.next.length === 0 && <Empty icon="🏖️">{t("agents.queueEmpty")}</Empty>}
+                {data.next.length === 0 && <Empty>{t("agents.queueEmpty")}</Empty>}
                 {data.next.map((r) => (
                   <div key={r.task.id} className="rec">
                     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -353,7 +353,7 @@ function AgentDetailPage({ id }: { id: string }) {
                         {r.task.key}
                       </button>
                       <span style={{ flex: 1 }}>{r.task.title}</span>
-                      {r.over_budget && <Pill color="#e2445c" outline>💸</Pill>}
+                      {r.over_budget && <Pill color="#9e2f3a" outline><Icon name="alert" size={12} /></Pill>}
                     </div>
                     <div className="reasons">{r.reasons.join(" · ")}</div>
                   </div>
@@ -369,12 +369,12 @@ function AgentDetailPage({ id }: { id: string }) {
                   <button key={task.id} className="list-item" onClick={() => openTask(task.key)}>
                     <KeyChip>{task.key}</KeyChip>
                     <div className="body">{task.title}</div>
-                    <Pill color="#676879" outline>
+                    <Pill color="#57534c" outline>
                       {t(`status.${task.status}` as MessageKey)}
                     </Pill>
                   </button>
                 ))}
-                {!data.tasks.length && <Empty icon="📭">{t("common.empty")}</Empty>}
+                {!data.tasks.length && <Empty>{t("common.empty")}</Empty>}
               </div>
             </section>
           </div>
@@ -435,7 +435,7 @@ function AgentDetailPage({ id }: { id: string }) {
         <div>
           {data.runs.length === 0 && (
             <div className="card">
-              <Empty icon="⚡">{t("agents.noRuns")}</Empty>
+              <Empty>{t("agents.noRuns")}</Empty>
             </div>
           )}
           {data.runs.map((r) => (

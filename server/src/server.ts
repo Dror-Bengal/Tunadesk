@@ -42,7 +42,7 @@ export interface ServeOptions {
 export function bootstrap(svc: Service, ownerName = "Me") {
   const ownerId = svc.settings().owner;
   if (!svc.findActor(ownerId)) {
-    svc.createActor({ id: ownerId, name: ownerName, kind: "human", emoji: "🧑‍💻", color: "#ff7575", issue_token: false });
+    svc.createActor({ id: ownerId, name: ownerName, kind: "human", emoji: "🧑‍💻", color: "#8c4a2f", issue_token: false });
   }
 }
 

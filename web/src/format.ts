@@ -1,53 +1,53 @@
 import type { Priority, TaskStatus } from "./types";
 
 export const STATUS_COLOR: Record<TaskStatus, string> = {
-  backlog: "#c4c4c4",
-  todo: "#579bfc",
-  in_progress: "#fdab3d",
-  review: "#a25ddc",
-  testing: "#784bd1",
-  blocked: "#e2445c",
-  done: "#00c875",
-  canceled: "#676879",
+  backlog: "#5f5a52",
+  todo: "#44546a",
+  in_progress: "#a8661c",
+  review: "#6b4a8a",
+  testing: "#4e4a8c",
+  blocked: "#9e2f3a",
+  done: "#2f6b4f",
+  canceled: "#3f3d3a",
 };
 
 export const PRIORITY_COLOR: Record<Priority, string> = {
-  critical: "#333333",
-  high: "#401694",
-  medium: "#5559df",
-  low: "#579bfc",
+  critical: "#7a1f2b",
+  high: "#8a5a1c",
+  medium: "#3d5a52",
+  low: "#5f5a52",
 };
 
 export const PROJECT_STATUS_COLOR: Record<string, string> = {
-  active: "#00c875",
-  paused: "#fdab3d",
-  done: "#579bfc",
-  archived: "#c4c4c4",
+  active: "#2f6b4f",
+  paused: "#a8661c",
+  done: "#44546a",
+  archived: "#5f5a52",
 };
 
 export const DECISION_STATUS_COLOR: Record<string, string> = {
-  proposed: "#fdab3d",
-  accepted: "#00c875",
-  rejected: "#e2445c",
-  superseded: "#c4c4c4",
+  proposed: "#a8661c",
+  accepted: "#2f6b4f",
+  rejected: "#9e2f3a",
+  superseded: "#5f5a52",
 };
 
 export const AGENT_STATUS_COLOR: Record<string, string> = {
-  working: "#00c875",
-  idle: "#579bfc",
-  offline: "#c4c4c4",
-  blocked: "#e2445c",
+  working: "#3f8a63",
+  idle: "#6b7a8f",
+  offline: "#5f5a52",
+  blocked: "#9e2f3a",
 };
 
 export const RUN_STATUS_COLOR: Record<string, string> = {
-  queued: "#c4c4c4",
-  running: "#fdab3d",
-  succeeded: "#00c875",
-  failed: "#e2445c",
-  skipped: "#a0a0a0",
+  queued: "#5f5a52",
+  running: "#a8661c",
+  succeeded: "#2f6b4f",
+  failed: "#9e2f3a",
+  skipped: "#57534c",
 };
 
-export const PALETTE = ["#579bfc", "#00c875", "#a25ddc", "#fdab3d", "#e2445c", "#0086c0", "#ff642e", "#037f4c", "#bb3354", "#784bd1", "#ff7575", "#66ccff"];
+export const PALETTE = ["#2f6b4f", "#8a5a1c", "#6b4a8a", "#9e2f3a", "#44546a", "#a8661c", "#2d6a6a", "#7a3b5c", "#5c6b2f", "#4e4a8c", "#8c4a2f", "#57534c"];
 
 export const PLATFORM_LABEL: Record<string, string> = {
   "claude-code": "Claude Code",
@@ -113,5 +113,5 @@ export function readableText(bg: string): string {
   const r = parseInt(hex.slice(0, 2), 16);
   const g = parseInt(hex.slice(2, 4), 16);
   const b = parseInt(hex.slice(4, 6), 16);
-  return (r * 299 + g * 587 + b * 114) / 1000 > 170 ? "#1f1f1f" : "#ffffff";
+  return (r * 299 + g * 587 + b * 114) / 1000 > 170 ? "#1d1b18" : "#f6f1e7";
 }

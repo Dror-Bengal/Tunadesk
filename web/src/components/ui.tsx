@@ -41,6 +41,14 @@ const PATHS: Record<string, string> = {
   sub: "M6 4v10a2 2 0 0 0 2 2h10M14 12l4 4-4 4",
   key: "M15 7a4 4 0 1 1-3.5 6L5 19.5V17h2.5v-2.5H10l1.5-1.5A4 4 0 0 1 15 7z",
   markdown: "M3 6h18v12H3zM6 15V9l3 3 3-3v6M16 9v6M14 13l2 2 2-2",
+  feature: "M12 3v4M12 17v4M3 12h4M17 12h4M6.3 6.3l2.5 2.5M15.2 15.2l2.5 2.5M6.3 17.7l2.5-2.5M15.2 8.8l2.5-2.5",
+  bug: "M8 9h8v6a4 4 0 0 1-8 0zM9 9V7a3 3 0 0 1 6 0v2M4 13h4M16 13h4M5 8l3 2M19 8l-3 2M5 19l3-2M19 19l-3-2",
+  flask: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3M7.5 15h9",
+  eye: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+  wrench: "M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z",
+  bell: "M6 16V11a6 6 0 1 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0",
+  alert: "M12 3 2 20h20zM12 10v4M12 17h.01",
+  loop: "M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3",
 };
 
 export function Icon({ name, size = 16, className }: { name: keyof typeof PATHS | string; size?: number; className?: string }) {
@@ -61,7 +69,7 @@ export function Avatar({ actor, size = 28, presence = false, title }: { actor: A
     );
   }
   return (
-    <span className="avatar" style={{ ["--size" as string]: `${size}px`, background: `color-mix(in srgb, ${actor.color} 28%, transparent)` }} title={title ?? `${actor.name} (@${actor.id})`}>
+    <span className="avatar" style={{ ["--size" as string]: `${size}px`, background: `color-mix(in srgb, ${actor.color} 30%, var(--surface-2))` }} title={title ?? `${actor.name} (@${actor.id})`}>
       {actor.emoji}
       {presence && <span className="presence" style={{ background: AGENT_STATUS_COLOR[actor.status] ?? AGENT_STATUS_COLOR.offline }} />}
     </span>
@@ -84,7 +92,7 @@ export function Pill({ color, children, outline }: { color: string; children: Re
       className="pill"
       style={
         outline
-          ? { color: `color-mix(in srgb, ${color} 72%, var(--text))`, background: `color-mix(in srgb, ${color} 16%, transparent)` }
+          ? { color: `color-mix(in srgb, ${color} 50%, var(--text))`, background: `color-mix(in srgb, ${color} 18%, transparent)`, boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${color} 30%, transparent)` }
           : { background: color, color: readableText(color) }
       }
     >
@@ -334,13 +342,8 @@ export function CopyButton({ text, small, label }: { text: string; small?: boole
   );
 }
 
-export function Empty({ icon = "🐟", children }: { icon?: string; children: ReactNode }) {
-  return (
-    <div className="empty-state">
-      <div className="big">{icon}</div>
-      {children}
-    </div>
-  );
+export function Empty({ children }: { children: ReactNode }) {
+  return <div className="empty-state">{children}</div>;
 }
 
 export function AgentViewLink({ href }: { href: string }) {

@@ -56,7 +56,7 @@ export function DecisionList({ project, q }: { project?: string; q?: string }) {
   const { data } = useApi<Decision[]>(`/api/decisions?${params}`);
   const list = (data ?? []).filter((d) => !q || `${d.ref} ${d.title} ${d.decision} ${d.rationale} ${d.context}`.toLowerCase().includes(q.toLowerCase()));
   if (!data) return null;
-  if (!list.length) return <div className="card"><Empty icon="⚖️">{t("decisions.empty")}</Empty></div>;
+  if (!list.length) return <div className="card"><Empty>{t("decisions.empty")}</Empty></div>;
   const setStatus = async (d: Decision, status: Decision["status"]) => {
     await run(() => patch(`/api/decisions/${d.id}`, { status }));
     invalidate();
